@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<title>OpenSchedule · 每日安排</title>
+<!--__FAVICON__-->
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ========== LEFT ========== -->
+  <aside class="left" id="left">
+    <button class="handle hl" id="handleL" title="展开日期栏" aria-label="展开日期栏">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="8.5 4.5 19 12 8.5 19.5"/></svg>
+    </button>
+    <div class="resizer resL" id="resizeL" title="拖动调节宽度"></div>
+
+    <div class="lhead">
+      <span class="dot"></span>
+      <h1>OpenSchedule<small>每日安排</small></h1>
+    </div>
+
+    <div class="lbody">
+      <div class="todayline" id="todayline"></div>
+
+      <div class="wide">
+        <div class="calhead">
+          <div class="t" id="calTitle">—</div>
+          <div style="display:flex;gap:5px">
+            <button class="navbtn" id="prevM" title="上个月">‹</button>
+            <button class="navbtn" id="todayBtn" title="回到今天">今</button>
+            <button class="navbtn" id="nextM" title="下个月">›</button>
+          </div>
+        </div>
+        <table class="cal">
+          <thead><tr><th>日</th><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th></tr></thead>
+          <tbody id="calBody"></tbody>
+        </table>
+      </div>
+
+      <div class="strip" id="strip">
+        <div class="smonth" id="smonth">—</div>
+        <div class="slist" id="slist"></div>
+      </div>
+    </div>
+
+    <div class="splitter splitL" id="chatSplit" title="拖动调节助手高度"><i></i></div>
+
+    <!-- 日程助手 -->
+    <div class="lfoot" id="lfoot">
+      <div class="chatlog" id="chatlog"></div>
+      <form class="chatrow" id="chatform" autocomplete="off">
+        <input id="chatinput" placeholder="问安排上的事…" maxlength="800">
+        <button class="send" type="submit" title="发送">↑</button>
+        <button type="button" id="chatcfg" title="配置模型供应商">⚙</button>
+      </form>
+    </div>
+  </aside>
+
+  <!-- ========== MAIN ========== -->
+  <main id="main"></main>
+
+  <!-- ========== RIGHT ========== -->
+  <aside class="right" id="right">
+    <div class="resizer resR" id="resizeR" title="拖动调节宽度"></div>
+
+    <section class="pane paneTop" id="paneTop">
+      <div class="tabs" id="tabs"></div>
+      <div class="rhead" id="rhead"></div>
+      <div class="rbody" id="rbody"></div>
+    </section>
+
+    <div class="splitter" id="splitter" title="拖动调节上下高度"><i></i></div>
+
+    <section class="pane paneBottom" id="paneBottom">
+      <div class="drafthead"><h2>草稿</h2></div>
+      <textarea class="draft" id="draft" placeholder="想到什么就写这儿：要调整的安排、新需求、待办…（自动保存）"></textarea>
+    </section>
+
+    <button class="handle hr" id="handleR" title="收起侧边栏" aria-label="收起侧边栏">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="8.5 4.5 19 12 8.5 19.5"/></svg>
+    </button>
+  </aside>
+</div>
+
+<!-- ========== 安排 编辑 ========== -->
+<div class="mask" id="mask">
+  <div class="modal">
+    <h3 id="mTitle">添加安排</h3>
+    <p class="mhint" id="mHint"></p>
+    <div class="quick" id="quick">
+      <button data-q="15:00|1h">15:00 · 1h</button>
+      <button data-q="16:00|1h">16:00 · 1h</button>
+      <button data-q="20:00|2h">20:00 · 2h</button>
+      <button data-q="20:00|1h30">20:00 · 1h30</button>
+      <button data-q="09:30|2h">09:30 · 2h</button>
+    </div>
+    <div class="frow">
+      <div class="fld"><label>开始时间</label><input id="fTime" placeholder="例：20:00"></div>
+      <div class="fld"><label>持续时长</label><input id="fDur" placeholder="例：2h / 1h30 / 45min"></div>
+    </div>
+    <div class="fld"><label>事项</label><input id="fTitle" placeholder="做什么"></div>
+    <div class="fld"><label>类型</label>
+      <select id="fType">
+        <option value="study">学习</option>
+        <option value="life">生活</option>
+        <option value="research">科研</option>
+        <option value="rest">缓冲</option>
+      </select>
+    </div>
+    <div class="fld"><label>说明</label><textarea id="fDetail" placeholder="怎么做 / 注意什么"></textarea></div>
+    <div class="fld"><label>子项清单（一行一条）</label><textarea id="fList" placeholder="可选"></textarea></div>
+    <div class="fld">
+      <label>资料链接（可加多条，类型按路径自动识别）</label>
+      <div id="linkRows"></div>
+      <div class="linkadd">
+        <button class="qbtn" id="addLinkRow">＋ 添加一条链接</button>
+        <span style="font-size:11.5px;color:var(--stone)">快捷插入：</span>
+        <span id="linkQuick" style="display:inline-flex;flex-wrap:wrap;gap:6px"></span>
+      </div>
+    </div>
+    <div class="fld"><label>今日产出</label><input id="fOut" placeholder="这块做完要留下什么"></div>
+    <div class="mact">
+      <button class="danger" id="mDelete" style="display:none">删除这条</button>
+      <button type="button" id="mCancel">取消</button>
+      <button class="primary" id="mSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 段落编辑 ========== -->
+<div class="mask" id="maskSec">
+  <div class="modal">
+    <h3 id="sTitle">编辑</h3>
+    <p class="mhint" id="sHint"></p>
+    <div id="secBody"></div>
+    <div class="mact">
+      <button type="button" id="sCancel">取消</button>
+      <button class="primary" id="sSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== DDL 编辑 ========== -->
+<div class="mask" id="maskDdl">
+  <div class="modal narrow">
+    <h3 id="dTitle">新增 DDL</h3>
+    <div class="frow">
+      <div class="fld"><label>截止日期</label><input id="dDate" type="date"></div>
+      <div class="fld"><label>事项</label><input id="dTask" placeholder="例：论文投稿"></div>
+    </div>
+    <div class="mact">
+      <button class="danger" id="dDelete" style="display:none">删除这条</button>
+      <button type="button" id="dCancel">取消</button>
+      <button class="primary" id="dSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 常用入口 编辑 ========== -->
+<div class="mask" id="maskLink">
+  <div class="modal narrow">
+    <h3 id="kTitle">新增入口</h3>
+    <div class="frow">
+      <div class="fld"><label>图标</label><input id="kIcon" placeholder="📄" maxlength="4"></div>
+      <div class="fld"><label>名称</label><input id="kLabel" placeholder="论文 docx"></div>
+    </div>
+    <div class="fld"><label>路径 / 链接</label><input id="kUrl" placeholder="D:/path/to/file.pdf"></div>
+    <div class="fld"><label>打开方式</label>
+      <select id="kMode"><option value="app">系统应用</option><option value="browser">浏览器</option></select>
+    </div>
+    <div class="mact">
+      <button class="danger" id="kDelete" style="display:none">删除这条</button>
+      <button type="button" id="kCancel">取消</button>
+      <button class="primary" id="kSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 模型池 ========== -->
+<div class="mask" id="maskCfg">
+  <div class="modal narrow">
+    <h3>模型池</h3>
+    <div class="poolbar">
+      <select id="cfgActive"></select>
+      <button type="button" class="qbtn" id="cfgAdd">＋ 新增</button>
+      <button type="button" class="qbtn" id="cfgDel">删除</button>
+    </div>
+    <div class="fld"><label>名称</label><input id="cfgName" placeholder="例：DeepSeek 主力"></div>
+    <div class="fld"><label>接口地址（base URL）</label><input id="cfgBase" placeholder="https://api.deepseek.com/v1"></div>
+    <div class="frow">
+      <div class="fld"><label>模型 ID</label><input id="cfgModel" placeholder="deepseek-chat"></div>
+      <div class="fld"><label>API Key</label><input id="cfgKey" type="password" placeholder="sk-…"></div>
+    </div>
+    <div class="mact">
+      <button type="button" id="cfgCancel">取消</button>
+      <button type="button" class="primary" id="cfgSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/*__APP__*/
+</script>
+</body>
+</html>
