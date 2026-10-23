@@ -22,3 +22,6 @@ Thumbs.db
 
 # 其它可能被误放的私人文件
 *.lnk
+
+# Mimosa 扫描缓存
+.mimosa/
