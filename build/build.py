@@ -13,10 +13,13 @@
   - data/    是个人数据（课表、DDL、资料路径、习惯画像），已 .gitignore；
   - examples/ 是脱敏后的示例数据，随仓库公开。
 """
-import io, os, re, json, argparse, base64
+import io, os, re, sys, json, argparse, base64, datetime
 from urllib.parse import quote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# PyInstaller 打包后资源在解包目录里
+if getattr(sys, "frozen", False):
+    ROOT = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(sys.executable)))
 
 
 def f(path):
@@ -41,15 +44,16 @@ def load_ddl(todo_path):
         rest = m.group(2)
         md = re.match(r"^(\d{4})\.(\d{1,2})\.(\d{1,2})\s+(.*)$", rest)
         md2 = re.match(r"^(\d{1,2})\.(\d{1,2})\s+(.*)$", rest)
+        this_year = datetime.date.today().year
         if md:
             y, mo, da, task = int(md.group(1)), int(md.group(2)), int(md.group(3)), md.group(4)
         elif md2:
-            y, mo, da, task = 2026, int(md2.group(1)), int(md2.group(2)), md2.group(3)
+            y, mo, da, task = this_year, int(md2.group(1)), int(md2.group(2)), md2.group(3)
         else:
             continue
         ddl.append({
             "date": "%04d-%02d-%02d" % (y, mo, da),
-            "ym": ("%d.%d" % (mo, da)) if y == 2026 else ("%d.%d.%d" % (y, mo, da)),
+            "ym": ("%d.%d" % (mo, da)) if y == this_year else ("%d.%d.%d" % (y, mo, da)),
             "task": task, "done": done,
         })
     return ddl
@@ -138,9 +142,9 @@ def build_links(data_dir):
     return sidebar, quick, todo
 
 
-def favicon_tag():
+def favicon_tag(root=None):
     """app-icon.png → data:image/png;base64，让浏览器标签页也使用同一个图标。"""
-    p = os.path.join(ROOT, "app-icon.png")
+    p = os.path.join(root or ROOT, "app-icon.png")
     if not os.path.exists(p):
         return ""
     b64 = base64.b64encode(open(p, "rb").read()).decode("ascii")
@@ -157,12 +161,18 @@ def build_profile(data_dir):
 
 
 # ---------------------------------------------------------------- 组装
-def build(profile="personal", out=None):
-    data_dir = os.path.join(ROOT, "data" if profile == "personal" else "examples")
+def build(profile="personal", out=None, data_dir=None, root=None):
+    """profile=personal 用 data_dir（默认 <root>/data），public 用 <root>/examples。
+
+    data/root 也可以显式传入，供打包后的 exe 在任意数据目录上现场构建。"""
+    root = root or ROOT
+    data_dir = data_dir or os.path.join(root, "data" if profile == "personal" else "examples")
+    auto_public = False
     # 干净 clone（没有 data/）时自动退到示例数据，保证第一条命令就能跑通
     if profile == "personal" and not os.path.exists(os.path.join(data_dir, "schedule.json")):
         print("data/ 不存在或不完整，改用 examples/ 生成脱敏示例版")
-        profile, data_dir = "public", os.path.join(ROOT, "examples")
+        profile, auto_public = "public", True
+        data_dir = os.path.join(root, "examples")
     if not os.path.isdir(data_dir):
         raise SystemExit("找不到数据目录: " + data_dir)
 
@@ -172,9 +182,9 @@ def build(profile="personal", out=None):
     for d in ddl:
         d["link"] = f(todo) if todo else ""
 
-    tpl = io.open(os.path.join(ROOT, "frontend", "index.html"), encoding="utf-8").read()
-    css = io.open(os.path.join(ROOT, "frontend", "assets", "app.css"), encoding="utf-8").read()
-    app = io.open(os.path.join(ROOT, "frontend", "assets", "app.js"), encoding="utf-8").read()
+    tpl = io.open(os.path.join(root, "frontend", "index.html"), encoding="utf-8").read()
+    css = io.open(os.path.join(root, "frontend", "assets", "app.css"), encoding="utf-8").read()
+    app = io.open(os.path.join(root, "frontend", "assets", "app.js"), encoding="utf-8").read()
 
     baked_js = "const BAKED = " + json.dumps(baked, ensure_ascii=False, indent=1) + ";"
     ddl_js = "const DDL = " + json.dumps(ddl, ensure_ascii=False, indent=1) + ";"
@@ -192,12 +202,16 @@ def build(profile="personal", out=None):
     app = app.replace("/*__LINKS_BLOCK__*/", links_js)
     assert "__BAKED_BLOCK__" not in app and "__DDL_BLOCK__" not in app and "__LINKS_BLOCK__" not in app
 
-    tpl = tpl.replace("<!--__FAVICON__-->", favicon_tag())
+    tpl = tpl.replace("<!--__FAVICON__-->", favicon_tag(root))
     assert "__FAVICON__" not in tpl
     tpl = tpl.replace("/*__CSS__*/", css).replace("/*__APP__*/", app)
 
-    out = out or (os.path.join(ROOT, "docs", "example.html") if profile == "public"
-                  else os.path.join(ROOT, "dist", "OpenSchedule.html"))
+    # 只有显式 --profile public 才写到 docs/example.html；
+    # “缺 data 自动降级”必须仍写 dist/OpenSchedule.html，否则 serve.py 首页 404。
+    if out is None:
+        out = (os.path.join(root, "docs", "example.html")
+               if profile == "public" and not auto_public
+               else os.path.join(root, "dist", "OpenSchedule.html"))
     os.makedirs(os.path.dirname(out), exist_ok=True)
     io.open(out, "w", encoding="utf-8").write(tpl)
     print("written:", out, os.path.getsize(out), "bytes")

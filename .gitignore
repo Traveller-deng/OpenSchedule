@@ -1,6 +1,14 @@
 # 个人数据：不进仓库
 data/
 dist/
+archive/
+
+# 打包产物（PyInstaller 工作目录与输出）
+release/
+
+# 本机运行时状态
+state.json
+logs/
 
 # 构建产物与临时文件
 *.pyc

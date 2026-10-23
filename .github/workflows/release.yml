@@ -1,0 +1,48 @@
+name: Release
+
+# 打 tag（v1.0.0 这类）时自动构建 Windows 免安装包并挂到 GitHub Release。
+# 也可以在 Actions 页面手动触发（workflow_dispatch），产物在 Artifacts 里。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: pip install pyinstaller pystray pillow
+
+      - name: Build exe
+        run: python -m PyInstaller --workpath release/work --distpath release/dist --noconfirm OpenSchedule.spec
+
+      - name: Zip portable package
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}"
+          if (-not $ver -or $ver -eq "refs/heads/main") { $ver = "dev" }
+          Compress-Archive -Path release/dist/OpenSchedule -DestinationPath "release/OpenSchedule-$ver-win64.zip"
+          Get-Item "release/OpenSchedule-$ver-win64.zip" | Select-Object Name,Length
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/OpenSchedule-*-win64.zip
+
+      - name: Upload artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenSchedule-win64
+          path: release/OpenSchedule-*-win64.zip

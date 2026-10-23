@@ -1662,7 +1662,8 @@ function fileBadge(l){
   const ext = m[1].toLowerCase();
   return EXT_BADGE[ext] || ext.toUpperCase();
 }
-/* 打开方式：app = 系统默认应用（文件夹→资源管理器，md→默认 markdown 编辑器）；browser = 浏览器打开 */
+/* 打开方式：app = 系统默认应用（文件夹→资源管理器，md→默认 markdown 编辑器）；browser = 浏览器打开。
+   本地路径的 href 只是兜底：file:// 页面直接导航；http 页面由下方拦截器交给 /api/open。 */
 function rawPathOf(l){
   if(l && l.path) return l.path;
   const u = String((l&&l.url)||"").trim();
@@ -1677,12 +1678,23 @@ function rawPathOf(l){
 function linkHref(l){
   if(!l) return "";
   const u = String(l.url||"").trim();
-  if(!u) return "";
-  if(/^(https?:|mailto:|openschedule:)/i.test(u)) return u;
-  if((l.mode||"app") === "browser") return u;
-  const p = rawPathOf(l);
-  if(p) return "openschedule://open/" + encodeURIComponent(p);
   return u;
+}
+/* http 模式（serve.py 在跑）时，浏览器不允许网页直接导航 file:// 链接，
+   交给本地服务用系统默认程序打开；file:// 模式下不拦截，走原生导航。 */
+if(/^https?:$/i.test(location.protocol)){
+  document.addEventListener("click", function(e){
+    const a = e.target.closest && e.target.closest("a[href]");
+    if(!a || !/^file:\/\//i.test(a.getAttribute("href")||"")) return;
+    e.preventDefault();
+    let p = (a.getAttribute("href")||"").replace(/^file:\/\/\/?/i,"");
+    try{ p = decodeURIComponent(p); }catch(err){}
+    fetch("/api/open", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({path:p})})
+      .then(function(r){ return r.ok ? r.json() : Promise.reject("服务返回 "+r.status); })
+      .then(function(d){ if(d && d.error) toast(d.error); })
+      .catch(function(err){ toast(typeof err==="string" ? "打开失败："+err : "打开失败，本地服务没在运行"); });
+  });
 }
 function renderLinkRows(list){
   const box = document.getElementById("linkRows");
