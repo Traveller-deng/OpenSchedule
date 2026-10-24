@@ -136,7 +136,7 @@ def page_is_stale(serve, html_path, version):
     if not os.path.exists(html_path):
         return True
     html_mtime = os.path.getmtime(html_path)
-    for name in ("schedule.json", "todo.md", "links.json", "profile.json"):
+    for name in ("schedule.md", "schedule.json", "todo.md", "links.json", "profile.json"):
         p = os.path.join(serve.DATA, name)
         if os.path.exists(p) and os.path.getmtime(p) > html_mtime:
             return True

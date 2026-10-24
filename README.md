@@ -30,9 +30,18 @@ python serve.py        # 自动复制示例数据、构建页面并打开浏览�
 
 或分步：`python build/build.py` 生成 `dist/OpenSchedule.html`（双击即用，纯 file:// 也能看），要 DDL 双向同步和左栏助手时再跑 `python serve.py`。
 
+**用命令行管理日程**（也方便 AI 助手代操作）：
+
+```bash
+python cli.py day show                    # 看今天（= 页面实际显示）
+python cli.py block add 2026-10-26 20:00 论文修改 research --d 2h
+python cli.py ddl add 10.28 交实验报告
+python cli.py --help                      # 全部命令
+```
+
 **只想看看**：直接用浏览器打开 `docs/example.html`。这是脱敏示例，不需要装任何东西，也不需要联网。
 
-> 想让 dsh / Claude Code 这类 AI 助手直接帮你改日程？它们进目录会自动读 [AGENTS.md](AGENTS.md) 里的数据格式与生效说明；服务运行时改动是自动同步的。
+> 想让 dsh / Claude Code 这类 AI 助手直接帮你改日程？它们进目录会自动读 [AGENTS.md](AGENTS.md)：首选 CLI，服务运行时改动自动同步到页面。
 
 运行时只依赖 **Python 3.8+ 标准库**；换图标（`build/make_icon.py`）和打包 exe 才需要额外库。
 
@@ -66,14 +75,19 @@ python build/package.py
 ```
 Schedule/
 ├─ app/launcher.py         桌面启动器：单实例 / 首跑初始化 / 托盘（打包入口）
+├─ app/uninstall.py        卸载器
+├─ cli.py                  命令行：日程全量读写（schedule.exe 同源）
 ├─ frontend/               通用前端
 │  ├─ index.html
 │  └─ assets/{app.css, app.js}
 ├─ build/
-│  ├─ build.py             frontend/ + data/ → 单文件 HTML
+│  ├─ build.py             schedule.md + data/ → 单文件 HTML
+│  ├─ package.py           一键出完整发布包（exe+卸载器+zip）
+│  ├─ selftest.py          CLI 自测
 │  └─ make_icon.py         app-icon.png → app-icon.ico（10 个尺寸）
-├─ serve.py                本地服务：页面托管 + todo.md 同步 + 助手 + /api/open
-├─ OpenSchedule.spec       PyInstaller 打包配置
+├─ serve.py                本地服务：页面托管 + todo/草稿/覆盖层同步 + 助手 + /api/open
+├─ OpenSchedule.spec       PyInstaller 打包配置（OpenSchedule.exe + schedule.exe）
+├─ AGENTS.md               给 AI 助手的操作说明
 ├─ .github/workflows/      自动构建发布（推 tag 触发）
 ├─ examples/               脱敏示例数据（随仓库公开）
 ├─ docs/                   示例产物与截图
@@ -85,25 +99,20 @@ Schedule/
 
 ## 数据格式
 
-`data/schedule.json`：
+数据目录下全部是**人可直接看/改**的文件（exe 版在 `%LOCALAPPDATA%\OpenSchedule\data\`）：
 
-```json
-{
-  "2026-10-23": {
-    "tasks": [{ "text": "写论文", "link": "DOCX" }],
-    "items": [
-      { "t": "20:00", "title": "论文修改", "type": "research", "d": "2h",
-        "detail": "改两节", "out": "定稿", "links": ["DOCX"] }
-    ]
-  }
-}
+**`schedule.md`** —— 时间表+任务明细（数据源）：
+
+```markdown
+## 2026-10-26
+任务: 写论文 →DOCX
+- 20:00 论文修改 [research] @2h | 改两节 | 定稿 | DOCX,CH4
+  - 子项一
 ```
 
-- `tasks` = 今日主要任务（一句话一条）；`items` = 具体时间块。
-- `links` 里写 `links.json → paths` 的 key，前端自动解析成完整链接。
-- `type` 取值：`study` 学习 / `life` 生活 / `research` 科研 / `rest` 缓冲。老文件里的 `class`、`must`、`gold`、`push`、`meet`、`red` 会自动映射（class/must→study，gold/push/meet/red→research）。
+时间块行按 `|` 顺序为：说明 / 产出 / 资料键（可省略段，顺序固定）。类型：`study` 学习 / `life` 生活 / `research` 科研 / `rest` 缓冲。资料键写 `links.json → paths` 的键名。旧的 `schedule.json` 首次构建时自动迁移（原文件改名 `.imported` 留档）。
 
-`data/todo.md`（DDL 的数据源）：
+**`todo.md`**（DDL 的数据源）：
 
 ```markdown
 - [ ] 10.25 论文改稿完成
@@ -111,16 +120,7 @@ Schedule/
 - [ ] 2027.1.4 论文投稿
 ```
 
-`data/links.json`：
-
-```json
-{
-  "todo": "D:/path/to/todo.md",
-  "paths": { "DOCX": { "path": "D:/.../论文.docx", "label": "论文 docx", "short": "论文" } },
-  "sidebar": [{ "icon": "📄", "label": "论文 docx", "key": "DOCX" }],
-  "quick": ["DOCX"]
-}
-```
+**`draft.md`** 草稿、**`links.json`** 资料路径/入口、**`edits.json`** 页面增改覆盖层（页面⇄文件自动双向同步）、**`agent.json`** 模型池——都可直接查看；结构见 [AGENTS.md](AGENTS.md)。
 
 ## License
 

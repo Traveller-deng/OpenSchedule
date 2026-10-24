@@ -55,12 +55,92 @@ def _resolve_paths():
 RES, DATA, DIST = _resolve_paths()
 TODO = os.path.join(DATA, "todo.md")
 CONFIG = os.path.join(DATA, "agent.json")
+EDITS = os.path.join(DATA, "edits.json")
+DRAFT = os.path.join(DATA, "draft.md")
 PORT = int(os.environ.get("SCHED_PORT") or 8123)
 HOST = "127.0.0.1"                      # 只绑回环，不触发防火墙
 URL = "http://127.0.0.1:%d/" % PORT
 
 # /api/shutdown 触发时依次调用的回调（启动器用它停托盘、清理状态文件）
 ON_SHUTDOWN = []
+
+if not getattr(sys, "frozen", False) and os.path.isdir(os.path.join(RES, "build")):
+    # 保证后续任何 `import build` 命中 build/build.py 模块，
+    # 而不是根目录下同名 build/ 目录的命名空间包
+    _BUILD_DIR = os.path.join(RES, "build")
+    if _BUILD_DIR not in sys.path:
+        sys.path.insert(0, _BUILD_DIR)
+
+
+def load_edits():
+    """页面本地增补层（浏览器 localStorage 的服务端副本）。
+
+    页面每次编辑都会 POST 到 /api/edits 存到这里；agent / CLI 也可以改它，
+    页面轮询发现变化后会自动采纳。结构见前端 emptyEdits()：
+    adds/ovr/hides（时间块）、sections（任务组替换）、tasksDone（任务完成标记）、
+    ddl/ddlDone（file:// 兜底用）、links（入口增改）。"""
+    try:
+        with io.open(EDITS, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_edits(d):
+    os.makedirs(DATA, exist_ok=True)
+    tmp = EDITS + ".tmp"
+    with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(d, f, ensure_ascii=False)
+    os.replace(tmp, EDITS)
+
+
+def effective_schedule():
+    """data 文件 + 页面覆盖层 → 页面实际展示的数据（各工具读它才和用户看到的一致）。
+
+    时间块：hides 藏起 baked 条目 → ovr 按字段覆盖 → adds 追加/插入；
+    任务组：sections[k].tasks 存在时整组替换；tasksDone 按任务文本标记完成。
+    与前端 buildList/daySections 的语义保持一致。"""
+    build_dir = os.path.join(RES, "build")
+    if build_dir not in sys.path:
+        sys.path.insert(0, build_dir)
+    import build as B
+    baked = B.build_schedule(DATA)
+    ed = load_edits()
+    adds_all, ovr_all, hides_all = ed.get("adds") or {}, ed.get("ovr") or {}, ed.get("hides") or {}
+    sections, tasks_done = ed.get("sections") or {}, ed.get("tasksDone") or {}
+    keys = set(baked) | {k for k in adds_all if isinstance(adds_all.get(k), list) and adds_all[k]} \
+        | {k for k in sections if isinstance(sections.get(k), dict) and sections[k].get("tasks") is not None}
+    out = {}
+    for k in keys:
+        plan = baked.get(k) or {}
+        items = [dict(it, id="b%d" % i) for i, it in enumerate(plan.get("items") or [])]
+        hidden = set(hides_all.get(k) or [])
+        items = [it for it in items if it["id"] not in hidden]
+        for it in items:
+            o = (ovr_all.get(k) or {}).get(it["id"])
+            if isinstance(o, dict):
+                for f in ("t", "d", "title", "type", "detail", "out", "list", "links"):
+                    if o.get(f) is not None:
+                        it[f] = o[f]
+                it["edited"] = True
+        for a in (adds_all.get(k) or []):
+            if not isinstance(a, dict):
+                continue
+            it = dict(a)
+            it.setdefault("src", "user")
+            after = it.get("after")
+            pos = next((i for i, x in enumerate(items) if x.get("id") == after), None)
+            if not after or after == "__tail__" or pos is None:
+                items.append(it)
+            else:
+                items.insert(pos + 1, it)
+        sec = sections.get(k)
+        tasks = sec.get("tasks") if isinstance(sec, dict) and sec.get("tasks") is not None \
+            else plan.get("tasks") or []
+        done = tasks_done.get(k) if isinstance(tasks_done.get(k), dict) else {}
+        out[k] = {"tasks": tasks, "tasksDone": done, "items": items}
+    return out
 
 
 # ---------------------------------------------------------------- 配置读写
@@ -128,7 +208,8 @@ def _provider_url_error(u):
 
 
 def context_text():
-    """把当前数据拼进 system prompt，让回答有据可依。"""
+    """把当前数据拼进 system prompt，让回答有据可依（含页面上的本地增补）。"""
+    import datetime
     lines = []
     try:
         todo = read_todo()
@@ -139,21 +220,26 @@ def context_text():
     except Exception:
         pass
     try:
-        build_dir = os.path.join(RES, "build")
-        if build_dir not in sys.path:
-            sys.path.insert(0, build_dir)
-        import build as B
-        baked = B.build_schedule(DATA)
-        import datetime
+        eff = effective_schedule()
         today = datetime.date.today().isoformat()
-        plan = baked.get(today) or {}
-        if plan.get("tasks"):
-            lines.append("今天主要任务：" + "；".join([t if isinstance(t, str) else t.get("t", "") for t in plan["tasks"]]))
+        plan = eff.get(today) or {}
+        done = plan.get("tasksDone") or {}
+
+        def task_text(t):
+            return t if isinstance(t, str) else t.get("t", "")
+        tasks = plan.get("tasks") or []
+        if tasks:
+            marks = ["%s%s" % ("[x] " if done.get(task_text(t)) else "", task_text(t))
+                     for t in tasks]
+            lines.append("今天主要任务：" + "；".join(marks))
         items = plan.get("items") or []
         if items:
-            lines.append("今天时间安排：" + "；".join("%s %s" % (i.get("t", ""), i.get("title", "")) for i in items))
+            lines.append("今天时间安排：" + "；".join(
+                "%s %s%s" % (i.get("t", ""), i.get("title", ""),
+                             "（已勾）" if isinstance(i, dict) and i.get("done") else "")
+                for i in items))
     except Exception:
-        log.exception("context_text 构建失败")
+        log.exception("context_text 合并失败")
     return "\n".join(lines)
 
 
@@ -210,6 +296,22 @@ def write_todo(text):
     os.replace(tmp, TODO)
 
 
+def read_draft():
+    try:
+        with io.open(DRAFT, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None                             # 文件不存在与空内容要区分
+
+
+def write_draft(text):
+    os.makedirs(DATA, exist_ok=True)
+    tmp = DRAFT + ".tmp"
+    with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    os.replace(tmp, DRAFT)
+
+
 # ---------------------------------------------------------------- 数据变更自动重建
 # agent 等外部工具直接改了 data/ 里的文件时，页面在下一次请求前现场重建，
 # 浏览器刷新（或按 /api/poll 的提示）即可看到，不需要托盘里手动“重建页面”。
@@ -222,7 +324,7 @@ def _data_is_stale():
         html_m = os.path.getmtime(html)
     except OSError:
         return True
-    for name in ("schedule.json", "todo.md", "links.json", "profile.json"):
+    for name in ("schedule.md", "schedule.json", "todo.md", "links.json", "profile.json"):
         try:
             if os.path.getmtime(os.path.join(DATA, name)) > html_m:
                 return True
@@ -328,6 +430,11 @@ class Handler(SimpleHTTPRequestHandler):
             if not os.path.exists(TODO):
                 return self._send(404, "todo.md not found")   # 前端会退回构建内副本
             return self._send(200, read_todo())
+        if path == "/api/draft":
+            txt = read_draft()
+            if txt is None:
+                return self._send(404, "draft.md not found")
+            return self._send(200, txt)
         if path == "/api/health":
             return self._json(200, {"ok": True, "app": APP_NAME, "version": APP_VERSION,
                                     "todo": os.path.exists(TODO)})
@@ -337,6 +444,16 @@ class Handler(SimpleHTTPRequestHandler):
                      "baseUrl": p.get("baseUrl", ""), "model": p.get("model", ""),
                      "hasKey": bool(p.get("apiKey"))} for p in cfg["providers"]]
             return self._json(200, {"active": cfg.get("active", ""), "providers": pool})
+        if path == "/api/edits":
+            d = load_edits()
+            try:
+                m = os.path.getmtime(EDITS)
+            except OSError:
+                m = 0
+            return self._json(200, {"edits": d, "mtime": m})
+        if path == "/api/schedule":
+            # agent / 外部工具读这里：data 文件 + 页面增补合并后的有效数据
+            return self._json(200, effective_schedule())
         if path == "/api/poll":
             # 页面每 4 秒来一次：todo 有变就重读；数据文件有变就先重建再报新页面时间戳
             rebuild_if_stale()
@@ -346,7 +463,8 @@ class Handler(SimpleHTTPRequestHandler):
                     return os.path.getmtime(p)
                 except OSError:
                     return 0
-            return self._json(200, {"todo": mtime(TODO),
+            return self._json(200, {"todo": mtime(TODO), "edits": mtime(EDITS),
+                                    "draft": mtime(DRAFT),
                                     "html": mtime(os.path.join(DIST, "OpenSchedule.html"))})
         if path in ("/", "/index.html"):
             rebuild_if_stale()
@@ -363,7 +481,13 @@ class Handler(SimpleHTTPRequestHandler):
             except OSError as e:
                 return self._send(500, "写入失败: %s" % e)
             return self._send(200, read_todo())
-        if path in ("/api/open", "/api/shutdown"):
+        if path == "/api/draft":
+            try:
+                write_draft(body)
+            except OSError as e:
+                return self._send(500, "写入失败: %s" % e)
+            return self._send(200, read_draft() or "")
+        if path in ("/api/open", "/api/shutdown", "/api/edits"):
             # 跨站防护：只收 application/json（跨站表单/纯文本发不进来），
             # 且 Origin/Referer 若存在必须指向本服务。
             ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -378,6 +502,15 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/open":
                 ok, err = open_path(incoming.get("path"))
                 return self._json(200 if ok else 400, {"ok": ok, "error": err})
+            if path == "/api/edits":
+                if not isinstance(incoming, dict) or len(body) > 1024 * 1024:
+                    return self._json(400, {"ok": False, "error": "bad edits"})
+                save_edits(incoming)
+                try:
+                    m = os.path.getmtime(EDITS)
+                except OSError:
+                    m = 0
+                return self._json(200, {"ok": True, "mtime": m})
 
             def _go():
                 for cb in ON_SHUTDOWN:

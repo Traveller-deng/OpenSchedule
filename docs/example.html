@@ -798,7 +798,16 @@ let edits = emptyEdits();
 try{ edits = Object.assign(edits, JSON.parse(localStorage.getItem(LS_KEY)) || {}); }catch(e){ edits = emptyEdits(); }
 if(!edits.ddl) edits.ddl = {ovr:{}, add:[], del:[]};
 if(!edits.links) edits.links = {ovr:{}, add:[], del:[]};
-function saveEdits(){ localStorage.setItem(LS_KEY, JSON.stringify(edits)); }
+let editsSyncOn = syncEligible(), editsSuppress = false, lastEditsMtime = null;
+function saveEdits(){
+  localStorage.setItem(LS_KEY, JSON.stringify(edits));
+  if(editsSyncOn && !editsSuppress)          /* 回写服务端，agent/CLI 才能看到页面上的改动 */
+    fetch("/api/edits", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(edits)})
+      .then(r=>r.ok ? r.json() : null)
+      .then(s=>{ if(s && s.mtime) lastEditsMtime = s.mtime; })
+      .catch(()=>{});
+}
 let ui = {lc:false, rc:true, tab:"ddl", lw:292, rw:344, draftH:210, draft:"", chatH:250};
 try{ Object.assign(ui, JSON.parse(localStorage.getItem(LS_KEY+"_ui")||"{}")); }catch(e){}
 
@@ -1378,24 +1387,42 @@ function syncSave(items){
 /* ---------------- 外部编辑自动感知 ----------------
    agent 等外部工具直接改 data/ 文件时（serve 模式）：
    - todo.md 变了 → 4 秒内自动并入页面（正在编辑则挂起，结束后再应用）
+   - 覆盖层（edits.json，页面改动的服务端副本）变了 → 自动采纳（CLI / 另一浏览器写入的）
    - schedule.json 等变了 → 服务端已重建页面，toast 提示刷新查看 */
 let lastTodoText = null;
+let draftSyncApi = null;                       /* draftEl 定义后接线（见文件底部） */
+function editingInFlight(){
+  const el = document.activeElement;
+  if(el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return true;
+  return !!document.querySelector(".mask.on");
+}
 if(syncEligible()){
-  let pollBase = null, pendingTodo = null;
-  function editingInFlight(){
-    const el = document.activeElement;
-    if(el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return true;
-    return !!document.querySelector(".mask.on");
-  }
+  let pollBase = null, pendingTodo = null, pendingEdits = null;
   function applyTodoText(txt){
     lastTodoText = txt;
     SYNC.ok = true; SYNC.items = parseTodoMd(txt); render();
+  }
+  function applyEditsObj(d, mtime){
+    editsSuppress = true;
+    try{
+      edits = Object.assign(emptyEdits(), d || {});
+      if(!edits.ddl) edits.ddl = {ovr:{}, add:[], del:[]};
+      if(!edits.links) edits.links = {ovr:{}, add:[], del:[]};
+      localStorage.setItem(LS_KEY, JSON.stringify(edits));
+    }finally{ editsSuppress = false; }
+    if(mtime) lastEditsMtime = mtime;
+    render();
   }
   function applyPending(){
     if(pendingTodo !== null && !editingInFlight()){
       const txt = pendingTodo; pendingTodo = null;
       if(txt !== lastTodoText) applyTodoText(txt);
     }
+    if(pendingEdits !== null && !editingInFlight()){
+      const d = pendingEdits; pendingEdits = null;
+      applyEditsObj(d.edits, d.mtime);
+    }
+    if(draftSyncApi) draftSyncApi.applyPending();
   }
   function pollOnce(){
     if(document.hidden) return;
@@ -1413,15 +1440,38 @@ if(syncEligible()){
               else applyTodoText(txt);
             }).catch(()=>{});
         }
+        if(s.edits !== undefined && s.edits !== pollBase.edits){
+          pollBase.edits = s.edits;
+          if(s.edits === lastEditsMtime) return;         /* 自己刚 POST 的回声 */
+          fetch("/api/edits", {cache:"no-store"})
+            .then(r=> r.ok ? r.json() : Promise.reject())
+            .then(d=>{
+              if(!d || JSON.stringify(d.edits) === JSON.stringify(edits)){ if(d) lastEditsMtime = d.mtime; return; }
+              if(editingInFlight()) pendingEdits = d;
+              else applyEditsObj(d.edits, d.mtime);
+            }).catch(()=>{});
+        }
         if(s.html !== pollBase.html){
           pollBase.html = s.html;
           toast("日程数据已更新，刷新页面查看");
         }
+        if(draftSyncApi) draftSyncApi.onPoll(s);
       }).catch(()=>{});
   }
   setInterval(pollOnce, 4000);
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden){ pollOnce(); applyPending(); } });
   document.addEventListener("focusout", applyPending);
+  /* 新浏览器 / 清过缓存：本地没有覆盖层而服务端有 → 恢复自己的页面改动 */
+  if(!localStorage.getItem(LS_KEY)){
+    fetch("/api/edits", {cache:"no-store"})
+      .then(r=> r.ok ? r.json() : Promise.reject())
+      .then(d=>{
+        if(d && d.edits && Object.keys(d.edits).length){
+          applyEditsObj(d.edits, d.mtime);
+          toast("已从本地服务恢复页面改动");
+        }
+      }).catch(()=>{});
+  }
 }
 function ddlPlain(){ return ddlList().map(x=>({date:x.date, task:x.task, done:x.done})); }
 function saveUI(){ try{ localStorage.setItem(LS_KEY+"_ui", JSON.stringify(ui)); }catch(e){} }
@@ -1895,6 +1945,57 @@ bindResizer(document.getElementById("resizeR"), "r");
 const draftEl = document.getElementById("draft");
 draftEl.value = ui.draft || "";
 draftEl.addEventListener("input", ()=>{ ui.draft = draftEl.value; saveUI(); });
+/* 草稿 ↔ data/draft.md：页面编辑防抖回写；文件被外部（agent/CLI）改动时自动采纳 */
+if(syncEligible()){
+  let lastDraft = null, pendingDraft = null, draftTimer = 0;
+  function applyDraft(txt){
+    lastDraft = txt;
+    if(txt !== ui.draft){ ui.draft = txt; draftEl.value = txt; saveUI(); }
+  }
+  draftSyncApi = {
+    onPoll(s){
+      if(s.draft === undefined || s.draft === this._mt) return;
+      this._mt = s.draft;
+      fetch("/api/draft", {cache:"no-store"})
+        .then(r=> r.ok ? r.text() : Promise.reject())
+        .then(txt=>{
+          if(txt === lastDraft || txt === draftEl.value || txt === pendingDraft) return;
+          if(editingInFlight() && document.activeElement === draftEl) pendingDraft = txt;
+          else applyDraft(txt);
+        }).catch(()=>{});
+    },
+    applyPending(){
+      if(pendingDraft !== null && document.activeElement !== draftEl){
+        const txt = pendingDraft; pendingDraft = null;
+        applyDraft(txt);
+      }
+    }
+  };
+  draftEl.addEventListener("input", ()=>{
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(()=>{
+      const txt = draftEl.value;
+      if(txt === lastDraft) return;
+      lastDraft = txt;
+      fetch("/api/draft", {method:"POST", headers:{"Content-Type":"text/plain; charset=utf-8"},
+        body: txt}).catch(()=>{});
+    }, 800);
+  });
+  /* 启动：文件优先；文件不存在时把浏览器里的旧草稿迁移上去 */
+  fetch("/api/draft", {cache:"no-store"})
+    .then(r=>{ if(r.ok) return r.text(); throw new Error("none"); })
+    .then(txt=>{
+      lastDraft = txt;
+      if(txt !== ui.draft){ ui.draft = txt; draftEl.value = txt; saveUI(); }
+    })
+    .catch(()=>{
+      if(ui.draft){
+        lastDraft = ui.draft;
+        fetch("/api/draft", {method:"POST", headers:{"Content-Type":"text/plain; charset=utf-8"},
+          body: ui.draft}).catch(()=>{});
+      }
+    });
+}
 
 document.getElementById("prevM").onclick = ()=>{ view = new Date(view.getFullYear(), view.getMonth()-1, 1); renderCal(); };
 document.getElementById("nextM").onclick = ()=>{ view = new Date(view.getFullYear(), view.getMonth()+1, 1); renderCal(); };

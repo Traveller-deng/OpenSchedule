@@ -22,7 +22,21 @@ a = Analysis(
     noarchive=False,
 )
 
+cli = Analysis(
+    ['cli.py'],                      # 命令行入口（schedule.exe）；资源/二进制与主程序共用
+    pathex=['.', 'build'],
+    binaries=[],
+    datas=[],
+    hiddenimports=['serve', 'build'],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=['tkinter', 'unittest', 'pydoc_data'],
+    noarchive=False,
+)
+
 pyz = PYZ(a.pure)
+cli_pyz = PYZ(cli.pure)
 
 exe = EXE(
     pyz,
@@ -39,8 +53,22 @@ exe = EXE(
     disable_windowed_traceback=False,
 )
 
+cli_exe = EXE(
+    cli_pyz,
+    cli.scripts,
+    [],
+    exclude_binaries=True,
+    name='schedule',
+    icon='app-icon.ico',
+    debug=False,
+    strip=False,
+    upx=False,
+    console=True,                    # CLI 需要标准输入输出
+)
+
 coll = COLLECT(
     exe,
+    cli_exe,
     a.binaries,
     a.datas,
     strip=False,

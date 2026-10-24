@@ -1,63 +1,45 @@
-# AGENTS.md — 给 AI 编码助手（dsh / Claude Code / ZCode 等）的操作说明
+# AGENTS.md — 给 AI 助手（dsh / Claude Code / ZCode 等）
 
-本仓库是 **OpenSchedule**：本地日程应用。用户会让你"把某天的安排改一下"之类——
-你可以直接编辑数据文件完成，不需要改代码。
+OpenSchedule：本地日程应用。**改日程用 CLI，不要手改文件**；数据文件本身全部人可读，供直接查看或精细修改。
 
-## 1. 数据在哪（按顺序探测）
+## CLI
 
-1. 环境变量 `SCHED_DATA` / `SCHED_DIST`（存在则优先）
-2. 安装态（OpenSchedule.exe 正常运行）：`%LOCALAPPDATA%\OpenSchedule\data\`
-3. 便携态：exe 旁边有 `data\schedule.json` → 用 exe 旁的 `data\`
-4. 源码运行：仓库根的 `data\`
+源码：`python cli.py …`；安装版：程序目录下 `schedule.exe …`（任何命令加 `--help` 看用法）。
 
-服务是否在跑：`GET http://127.0.0.1:8123/api/health` → `{"app":"OpenSchedule"}` 即在。
-
-## 2. 文件与格式
-
-### data/todo.md — DDL（服务模式下页面的唯一真源）
-
-```markdown
-- [ ] 10.26 交实验报告
-- [x] 10.25 论文改稿完成
-- [ ] 2027.1.4 论文投稿
+```text
+schedule status                                 # 环境/服务状态        schedule rebuild 立即重建页面
+schedule day show [today|YYYY-MM-DD]            # 看某天（= 页面实际显示，含页面上的增改与勾选）
+schedule ddl list | add <MM.DD> <文本> | done|undo|edit|remove <序号|关键词>
+schedule block add <日期> <HH:MM> <标题> <类型> [--d 1h] [--detail …] [--out …] [--link 键]
+schedule block set <日期> <序号|HH:MM> [--time --title --type --d --detail --out]
+schedule block remove <日期> <序号|HH:MM>
+schedule task add <日期> <文本> [--link 键] | task remove|done|undo <日期> <序号|关键词>
+schedule path list|set <键> <路径> [--label --kind --short] | path remove <键>
+schedule quick add|remove <键>                  # 常用入口      schedule sidebar add|remove <键>
+schedule provider list|use|add|remove           # 模型池（Key 用 --key-stdin，不进 shell 历史）
+schedule draft show|set|append|clear            # 草稿          schedule open <路径>
 ```
 
-- `MM.DD` 短日期 = **当年**；跨年写全 `YYYY.M.D`
-- 一行一条，`- [ ]` 未完成、`- [x]` 已完成；保持原有行不动，只改要求的
+类型：`study` 学习 / `life` 生活 / `research` 科研 / `rest` 缓冲。日期 `MM.DD`=当年，跨年写 `YYYY.M.D`。
+资料键是 `links.json → paths` 的键名（`path list` 可查），不是路径本身。
 
-### data/schedule.json — 时间表 / 今日主要任务
+## 数据文件（数据目录 data\ 下，人可直接看/改）
 
-```json
-{ "2026-10-26": {
-    "tasks": [{"text": "写论文", "link": "DOCX"}],
-    "items": [
-      {"t": "20:00", "title": "论文修改", "type": "research", "d": "2h",
-       "detail": "改两节", "out": "定稿", "links": ["DOCX"]}
-    ] } }
-```
-
-- 键为 `YYYY-MM-DD`；`items` 按时间排序；`t` 必须 `HH:MM`
-- `type` 只能是 `study` / `life` / `research` / `rest`（旧值会自动映射，新写的用这四个）
-- `tasks`、`d`、`detail`、`out`、`links` 都可省略
-- `link` / `links` 里写 `links.json → paths` 的键名，不是路径本身
-
-### data/links.json — 资料路径表 / 常用入口
-
-`paths` 是"键名 → 本机绝对路径"的映射；`sidebar` / `quick` 引用这些键。只在用户明确要求时改。
-
-## 3. 改完如何生效（服务在跑时全部自动，无需托盘操作）
-
-| 改的文件 | 生效方式 |
+| 文件 | 内容 |
 |---|---|
-| `todo.md` | 保存后约 4 秒页面自动并入 |
-| `schedule.json` 等其它 data 文件 | 下次页面请求时服务自动重建（<0.5s），页面弹"刷新查看"提示，F5 即见 |
-| 服务没在跑 | 用户下次启动时自动构建 |
+| `schedule.md` | 时间表+任务明细（**数据源**）。每天一节 `## YYYY-MM-DD`；任务行 `任务: 文本 →资料键`；时间块行 `- HH:MM 标题 [类型] @时长 \| 说明 \| 产出 \| 键1,键2`（\| 段可省、顺序固定，段内不要用 \|）；子项写在下一行缩进 `- 文本` |
+| `todo.md` | DDL：`- [ ] MM.DD 文本`（`[x]`=已完成） |
+| `draft.md` | 草稿（页面上那份的实体） |
+| `links.json` | 资料路径表 / 常用入口 / 左栏入口 |
+| `edits.json` | 页面增改覆盖层（页面⇄文件双向同步，一般不用手改） |
+| `agent.json` | 模型池（**不要读取 apiKey**） |
 
-## 4. 硬性约束
+位置探测：环境变量 `SCHED_DATA` → exe 旁 `data\` → `%LOCALAPPDATA%\OpenSchedule\data`。
+服务在跑与否：`GET http://127.0.0.1:8123/api/health`。有效日程也可直接 `GET /api/schedule`。
 
-- 一律 UTF-8 编码写文件；保持 JSON 合法；不要重排/重写无关字段和日期键
-- 不要改 `dist/`、`docs/example.html`（构建产物）、`release/`（打包产物）
-- 不要读取或外传 `data/agent.json` 里的 `apiKey`
-- **localStorage 覆盖规则**：用户曾在页面上手动增改过的条目存在浏览器本地、优先于文件——
-  若你改的条目在页面上"没生效"，多半是被本地覆盖，如实告知用户即可，不要反复重写文件
-- 改完用一次 `GET /api/poll` 可以立即触发服务端重建（省去等 4 秒）
+## 生效与规则
+
+- CLI 写完自动重建页面；服务运行时页面约 4 秒自动感知（todo/草稿/勾选直接并入，schedule 改动弹提示刷新）。
+- 直接手改文件同样有效：改完跑 `schedule rebuild`，或等页面下次构建。
+- 用户曾在页面上增改的条目存于 `edits.json`（优先于数据文件）；CLI 的 task done/undo 也写它，两边自动同步。
+- `schedule.json` 已迁移为 `schedule.json.imported`，不要再写它；不要改 `dist/`、`docs/example.html`、`release/`；一律 UTF-8。

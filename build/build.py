@@ -30,6 +30,151 @@ def f(path):
     return "file://" + quote(p, safe="/:&=%#?~+,;")
 
 
+# ---------------------------------------------------------------- schedule.md（数据源）
+# 人可读、人可改的精炼格式；schedule.json 只在首次迁移时被读取（随后改名 .imported 留存）。
+#
+#   ## 2026-10-24
+#   任务: 写论文 →DOCX
+#   - 20:00 论文修改 [research] @2h | 改两节 | 定稿 | DOCX,CH4
+#     - 子项一
+#
+# 段落按 | 顺序为：说明 / 产出 / 资料键（可省略段，但顺序固定）。
+SCHED_HEADER = (
+    "# OpenSchedule 日程数据源（本文件为人可编辑的最终数据源）\n"
+    "# 每天一节：## YYYY-MM-DD\n"
+    "# 任务行：任务: 文本 →资料键（→可省）\n"
+    "# 时间块行：- HH:MM 标题 [类型] @时长 | 说明 | 产出 | 资料键1,键2（| 段可省，顺序固定；段内不要用 |）\n"
+    "# 类型：study/life/research/rest；子项：时间块下一行缩进 \"- 文本\"\n")
+
+_MD_TASK = re.compile(r"^任务[:：]\s*(.+?)\s*$")
+_MD_TASK_LINK = re.compile(r"^(.*?)\s*→\s*([A-Za-z0-9_\-]+)$")
+_MD_ITEM = re.compile(r"^[-*]\s+(\d{1,2})[:：](\d{2})\s+(.+)$")
+_MD_SUB = re.compile(r"^[-*]\s+(.+)$")
+_MD_HEAD = re.compile(r"^#{2,3}\s*(\d{4})-(\d{1,2})-(\d{1,2})\b")
+_MD_TAIL = re.compile(r"^(.*?)(?:\s+\[([A-Za-z]+)\])?(?:\s+@(\S+))?$")
+
+
+def parse_schedule_md(text):
+    days = {}
+    cur = None
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        m = _MD_HEAD.match(s)                    # 日期头要先于注释判断（## 也是 # 开头）
+        if m:
+            try:
+                cur = datetime.date(int(m[1]), int(m[2]), int(m[3])).isoformat()
+            except ValueError:
+                cur = None
+            if cur:
+                days[cur] = {}
+            continue
+        if s.startswith("#"):
+            continue
+        tm = _MD_TASK.match(s)
+        if tm and not re.match(r"^\d{1,2}[:：]\d{2}\s", tm[1]):
+            t = tm[1]
+            lk = _MD_TASK_LINK.match(t)
+            if lk:
+                days[cur].setdefault("tasks", []).append({"text": lk[1].strip(), "link": lk[2]})
+            else:
+                days[cur].setdefault("tasks", []).append(t)
+            continue
+        im = _MD_ITEM.match(s)
+        if im:
+            it = {"t": "%02d:%s" % (int(im[1]), im[2]),
+                  "title": "", "type": "rest"}
+            segs = [x.strip() for x in im[3].split("|")]
+            hm = _MD_TAIL.match(segs[0])
+            it["title"] = hm[1].strip() or "（无标题）"
+            if hm[2]:
+                it["type"] = TYPE_MD.get(hm[2], hm[2])
+            if hm[3]:
+                it["d"] = hm[3]
+            if len(segs) > 1 and segs[1]:
+                it["detail"] = segs[1]
+            if len(segs) > 2 and segs[2]:
+                it["out"] = segs[2]
+            if len(segs) > 3 and segs[3]:
+                it["links"] = [x for x in (y.strip() for y in segs[3].split(",")) if x]
+            days[cur].setdefault("items", []).append(it)
+            continue
+        sm = _MD_SUB.match(s)
+        if sm and days[cur].get("items"):
+            days[cur]["items"][-1].setdefault("list", []).append(sm[1].strip())
+    return days
+
+
+TYPE_MD = {"study": "study", "life": "life", "research": "research", "rest": "rest",
+           "class": "study", "must": "study", "gold": "research",
+           "push": "research", "meet": "research", "red": "research"}
+
+
+def _md_tmin(it):
+    m = re.match(r"^(\d{1,2}):(\d{2})$", str(it.get("t", "")))
+    return (int(m[1]) * 60 + int(m[2])) if m else 99999
+
+
+def serialize_schedule_md(days):
+    out = SCHED_HEADER.rstrip("\n").splitlines()
+    for k in sorted(days):
+        plan = days[k] or {}
+        out.append("")
+        out.append("## %s" % k)
+        for t in plan.get("tasks") or []:
+            if isinstance(t, dict):
+                out.append("任务: %s%s" % (t.get("text", ""),
+                                           (" →" + t["link"]) if t.get("link") else ""))
+            else:
+                out.append("任务: " + t)
+        for it in sorted(plan.get("items") or [], key=_md_tmin):
+            ty = TYPE_MD.get(str(it.get("type", "rest")), "rest")
+            seg = "- %s %s [%s]" % (it.get("t", "??:??"), it.get("title", "（无标题）"), ty)
+            if it.get("d"):
+                seg += " @%s" % it["d"]
+            tail = [it.get("detail", ""), it.get("out", ""),
+                    ",".join(it.get("links") or [])]
+            while tail and not tail[-1]:
+                tail.pop()
+            if tail:
+                seg += " | " + " | ".join(x if x else "" for x in tail)
+            out.append(seg)
+            for s in it.get("list") or []:
+                out.append("  - " + str(s))
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def schedule_md_path(data_dir):
+    return os.path.join(data_dir, "schedule.md")
+
+
+def load_schedule(data_dir):
+    """schedule.md 为数据源；只有它不存在时才从 schedule.json 一次性迁移。"""
+    md = schedule_md_path(data_dir)
+    if os.path.exists(md):
+        return parse_schedule_md(io.open(md, encoding="utf-8").read())
+    js = os.path.join(data_dir, "schedule.json")
+    if os.path.exists(js):
+        days = json.load(io.open(js, encoding="utf-8"))
+        os.makedirs(data_dir, exist_ok=True)
+        tmp = md + ".tmp"
+        io.open(tmp, "w", encoding="utf-8", newline="\n").write(serialize_schedule_md(days))
+        os.replace(tmp, md)
+        os.replace(js, js + ".imported")     # 旧文件留档，避免回退到过期数据
+        print("schedule.json 已迁移为 schedule.md（原文件改名 schedule.json.imported）")
+        return days
+    return {}
+
+
+def save_schedule(data_dir, days):
+    md = schedule_md_path(data_dir)
+    os.makedirs(data_dir, exist_ok=True)
+    tmp = md + ".tmp"
+    io.open(tmp, "w", encoding="utf-8", newline="\n").write(serialize_schedule_md(days))
+    os.replace(tmp, md)
+
+
 # ---------------------------------------------------------------- 数据加载
 def load_ddl(todo_path):
     """从 TODO LIST.md 解析 DDL。格式：- [ ] 10.25 任务名 / - [x] 2027.1.4 任务名"""
@@ -77,8 +222,8 @@ def resolve_links(spec, paths):
 
 
 def build_schedule(data_dir):
-    """schedule.json → 前端 BAKED 结构。"""
-    sched = json.load(io.open(os.path.join(data_dir, "schedule.json"), encoding="utf-8"))
+    """schedule.md（或迁移前的 schedule.json）→ 前端 BAKED 结构。"""
+    sched = load_schedule(data_dir)
     links_cfg = json.load(io.open(os.path.join(data_dir, "links.json"), encoding="utf-8"))
     paths = links_cfg.get("paths", {})
 
@@ -168,8 +313,10 @@ def build(profile="personal", out=None, data_dir=None, root=None):
     root = root or ROOT
     data_dir = data_dir or os.path.join(root, "data" if profile == "personal" else "examples")
     auto_public = False
-    # 干净 clone（没有 data/）时自动退到示例数据，保证第一条命令就能跑通
-    if profile == "personal" and not os.path.exists(os.path.join(data_dir, "schedule.json")):
+    # 干净 clone（没有数据源）时自动退到示例数据；md 与 json 任一存在即算有数据
+    has_source = (os.path.exists(os.path.join(data_dir, "schedule.md"))
+                  or os.path.exists(os.path.join(data_dir, "schedule.json")))
+    if profile == "personal" and not has_source:
         print("data/ 不存在或不完整，改用 examples/ 生成脱敏示例版")
         profile, auto_public = "public", True
         data_dir = os.path.join(root, "examples")
@@ -213,7 +360,9 @@ def build(profile="personal", out=None, data_dir=None, root=None):
                if profile == "public" and not auto_public
                else os.path.join(root, "dist", "OpenSchedule.html"))
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    io.open(out, "w", encoding="utf-8").write(tpl)
+    tmp = out + ".tmp"
+    io.open(tmp, "w", encoding="utf-8").write(tpl)
+    os.replace(tmp, out)                    # 原子替换：CLI 与服务并发重建也不会写坏
     print("written:", out, os.path.getsize(out), "bytes")
     print("profile:", profile, "| days:", len(baked),
           "| 详细排期天数:", sum(1 for p in baked.values() if p.get("items")),
