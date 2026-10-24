@@ -1663,37 +1663,41 @@ function fileBadge(l){
   return EXT_BADGE[ext] || ext.toUpperCase();
 }
 /* 打开方式：app = 系统默认应用（文件夹→资源管理器，md→默认 markdown 编辑器）；browser = 浏览器打开。
-   本地路径的 href 只是兜底：file:// 页面直接导航；http 页面由下方拦截器交给 /api/open。 */
-function rawPathOf(l){
-  if(l && l.path) return l.path;
-  const u = String((l&&l.url)||"").trim();
-  if(/^[A-Za-z]:[\\/]/.test(u)) return u;
-  if(/^file:\/\//i.test(u)){
-    let p = u.replace(/^file:\/\/\/?/i,"").replace(/^\//,"");
-    try{ p = decodeURIComponent(p); }catch(e){}
-    return p;
-  }
-  return null;
-}
+   本地路径（file:// 或手填的 D:\x / \\server\x）在 http 页面统一由下方拦截器交给 /api/open。 */
 function linkHref(l){
   if(!l) return "";
   const u = String(l.url||"").trim();
+  if(!u) return "";
+  if(/^(https?:|mailto:|file:)/i.test(u)) return u;
+  /* 手填的本地路径规范成 file:// URL，否则浏览器会把 D:\x 当相对地址解析掉 */
+  if(/^[A-Za-z]:[\\/]/.test(u) || /^\\\\/.test(u))
+    return "file:///" + encodeURIComponent(u.replace(/\\/g,"/"));
   return u;
 }
-/* http 模式（serve.py 在跑）时，浏览器不允许网页直接导航 file:// 链接，
+/* http 模式（serve.py 在跑）时，浏览器不允许网页直接导航本地文件链接，
    交给本地服务用系统默认程序打开；file:// 模式下不拦截，走原生导航。 */
 if(/^https?:$/i.test(location.protocol)){
   document.addEventListener("click", function(e){
     const a = e.target.closest && e.target.closest("a[href]");
-    if(!a || !/^file:\/\//i.test(a.getAttribute("href")||"")) return;
+    if(!a) return;
+    const href = a.getAttribute("href") || "";
+    let p = null;
+    if(/^file:\/\//i.test(href)){
+      p = href.replace(/^file:\/\/\/?/i, "");
+      try{ p = decodeURIComponent(p); }catch(err){}
+    }else if(/^[A-Za-z]:[\\/]/.test(href) || /^\\\\/.test(href)){
+      p = href;                                /* 旧数据里存过的裸路径 */
+    }
+    if(p === null) return;
     e.preventDefault();
-    let p = (a.getAttribute("href")||"").replace(/^file:\/\/\/?/i,"");
-    try{ p = decodeURIComponent(p); }catch(err){}
     fetch("/api/open", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({path:p})})
-      .then(function(r){ return r.ok ? r.json() : Promise.reject("服务返回 "+r.status); })
-      .then(function(d){ if(d && d.error) toast(d.error); })
-      .catch(function(err){ toast(typeof err==="string" ? "打开失败："+err : "打开失败，本地服务没在运行"); });
+      .then(function(r){ return r.json().catch(function(){ return null; }); })
+      .then(function(d){
+        if(d && d.error) toast(d.error);
+        else if(!d || !d.ok) toast("打开失败：本地服务没有在运行");
+      })
+      .catch(function(){ toast("打开失败：本地服务没有在运行"); });
   });
 }
 function renderLinkRows(list){

@@ -23,16 +23,8 @@ jobs:
       - name: Install build deps
         run: pip install pyinstaller pystray pillow
 
-      - name: Build exe
-        run: python -m PyInstaller --workpath release/work --distpath release/dist --noconfirm OpenSchedule.spec
-
-      - name: Zip portable package
-        shell: pwsh
-        run: |
-          $ver = "${{ github.ref_name }}"
-          if (-not $ver -or $ver -eq "refs/heads/main") { $ver = "dev" }
-          Compress-Archive -Path release/dist/OpenSchedule -DestinationPath "release/OpenSchedule-$ver-win64.zip"
-          Get-Item "release/OpenSchedule-$ver-win64.zip" | Select-Object Name,Length
+      - name: Build package (exe + uninstaller + zip)
+        run: python build/package.py
 
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')

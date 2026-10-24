@@ -186,17 +186,25 @@ def make_tray(serve, icon_path, url, on_rebuild, on_quit):
     def open_data(icon=None, item=None):
         serve.open_path(serve.DATA)
 
+    items = [
+        MenuItem("打开页面", open_page, default=True),
+        MenuItem("数据文件夹", open_data),
+        MenuItem("重建页面", lambda ic, it: on_rebuild()),
+    ]
+    uninstaller = os.path.join(os.path.dirname(os.path.abspath(sys.executable)),
+                               "uninstall.exe")
+    if getattr(sys, "frozen", False) and os.path.exists(uninstaller):
+        items.append(Menu.SEPARATOR)
+        items.append(MenuItem("卸载 OpenSchedule…",
+                              lambda ic, it: os.startfile(uninstaller)))
+    items.append(Menu.SEPARATOR)
+    items.append(MenuItem("退出", lambda ic, it: on_quit()))
+
     icon = Icon(
         APP_NAME,
         Image.open(icon_path),
         APP_NAME,
-        Menu(
-            MenuItem("打开页面", open_page, default=True),
-            MenuItem("数据文件夹", open_data),
-            MenuItem("重建页面", lambda ic, it: on_rebuild()),
-            Menu.SEPARATOR,
-            MenuItem("退出", lambda ic, it: on_quit()),
-        ),
+        Menu(*items),
     )
     icon.run_detached()
     return icon

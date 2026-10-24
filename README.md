@@ -16,7 +16,8 @@
 
 - 第一次运行自动初始化数据目录（`%LOCALAPPDATA%\OpenSchedule\`，从内置示例播种，绝不覆盖已有数据）；
 - 之后每次双击直接进入页面，再次双击不会起第二个服务，只会把浏览器带到已打开的页面；
-- 退出用系统托盘图标（打开页面 / 数据文件夹 / 重建页面 / 退出）；
+- 退出用系统托盘图标（打开页面 / 数据文件夹 / 重建页面 / 卸载 / 退出）；
+- 不想用了就运行同目录的 **uninstall.exe**：自动停服务、可选删除个人数据、清掉整个程序文件夹（不写注册表，没有别的残留）；
 - 机器上**不需要装 Python 或任何依赖**，也不写注册表、不碰防火墙（只绑 127.0.0.1）。
 
 ### 方式二：从源码跑（适合改代码）
@@ -37,11 +38,12 @@ python serve.py        # 自动复制示例数据、构建页面并打开浏览�
 
 ```bash
 pip install pyinstaller pystray pillow
-python -m PyInstaller --workpath release/work --distpath release/dist --noconfirm OpenSchedule.spec
-# 产物：release/dist/OpenSchedule/OpenSchedule.exe
+python build/package.py
+# 产物：release/dist/OpenSchedule/（含 OpenSchedule.exe 和 uninstall.exe）
+#       release/OpenSchedule-<版本>-win64.zip（直接发布用的压缩包）
 ```
 
-也可以直接推 tag（如 `v1.0.0`），GitHub Actions 会自动构建并把 zip 挂到 Release（见 `.github/workflows/release.yml`）。
+也可以直接推 tag（如 `v1.0.1`），GitHub Actions 会自动构建并把 zip 挂到 Release（见 `.github/workflows/release.yml`）。
 
 ## 功能
 
