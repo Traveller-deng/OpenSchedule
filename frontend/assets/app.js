@@ -588,16 +588,64 @@ function syncLoad(){
   if(!syncEligible()) return;
   fetch("/api/todo", {cache:"no-store"})
     .then(r=>{ if(!r.ok) throw new Error("bad"); return r.text(); })
-    .then(txt=>{ SYNC.ok = true; SYNC.items = parseTodoMd(txt); render(); })
+    .then(txt=>{ lastTodoText = txt; SYNC.ok = true; SYNC.items = parseTodoMd(txt); render(); })
     .catch(()=>{ SYNC.ok = false; });
 }
 function syncSave(items){
   if(!SYNC.ok) return false;
   fetch("/api/todo", {method:"POST", headers:{"Content-Type":"text/plain; charset=utf-8"}, body: todoMdText(items)})
     .then(r=>{ if(!r.ok) throw new Error("bad"); return r.text(); })
-    .then(txt=>{ SYNC.items = parseTodoMd(txt); render(); })
+    .then(txt=>{ lastTodoText = txt; SYNC.items = parseTodoMd(txt); render(); })
     .catch(()=>{ alert("写入 todo.md 失败，检查 serve.py 是否还在运行。"); render(); });
   return true;
+}
+/* ---------------- 外部编辑自动感知 ----------------
+   agent 等外部工具直接改 data/ 文件时（serve 模式）：
+   - todo.md 变了 → 4 秒内自动并入页面（正在编辑则挂起，结束后再应用）
+   - schedule.json 等变了 → 服务端已重建页面，toast 提示刷新查看 */
+let lastTodoText = null;
+if(syncEligible()){
+  let pollBase = null, pendingTodo = null;
+  function editingInFlight(){
+    const el = document.activeElement;
+    if(el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)) return true;
+    return !!document.querySelector(".mask.on");
+  }
+  function applyTodoText(txt){
+    lastTodoText = txt;
+    SYNC.ok = true; SYNC.items = parseTodoMd(txt); render();
+  }
+  function applyPending(){
+    if(pendingTodo !== null && !editingInFlight()){
+      const txt = pendingTodo; pendingTodo = null;
+      if(txt !== lastTodoText) applyTodoText(txt);
+    }
+  }
+  function pollOnce(){
+    if(document.hidden) return;
+    fetch("/api/poll", {cache:"no-store"})
+      .then(r=>r.json())
+      .then(s=>{
+        if(pollBase === null){ pollBase = s; return; }   /* 第一次只记基线 */
+        if(s.todo !== pollBase.todo){
+          pollBase.todo = s.todo;
+          fetch("/api/todo", {cache:"no-store"})
+            .then(r=> r.ok ? r.text() : Promise.reject())
+            .then(txt=>{
+              if(txt === lastTodoText || txt === pendingTodo) return;
+              if(editingInFlight()) pendingTodo = txt;
+              else applyTodoText(txt);
+            }).catch(()=>{});
+        }
+        if(s.html !== pollBase.html){
+          pollBase.html = s.html;
+          toast("日程数据已更新，刷新页面查看");
+        }
+      }).catch(()=>{});
+  }
+  setInterval(pollOnce, 4000);
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden){ pollOnce(); applyPending(); } });
+  document.addEventListener("focusout", applyPending);
 }
 function ddlPlain(){ return ddlList().map(x=>({date:x.date, task:x.task, done:x.done})); }
 function saveUI(){ try{ localStorage.setItem(LS_KEY+"_ui", JSON.stringify(ui)); }catch(e){} }

@@ -32,6 +32,8 @@ python serve.py        # 自动复制示例数据、构建页面并打开浏览�
 
 **只想看看**：直接用浏览器打开 `docs/example.html`。这是脱敏示例，不需要装任何东西，也不需要联网。
 
+> 想让 dsh / Claude Code 这类 AI 助手直接帮你改日程？它们进目录会自动读 [AGENTS.md](AGENTS.md) 里的数据格式与生效说明；服务运行时改动是自动同步的。
+
 运行时只依赖 **Python 3.8+ 标准库**；换图标（`build/make_icon.py`）和打包 exe 才需要额外库。
 
 ## 从源码打包 exe

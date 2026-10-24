@@ -210,6 +210,47 @@ def write_todo(text):
     os.replace(tmp, TODO)
 
 
+# ---------------------------------------------------------------- 数据变更自动重建
+# agent 等外部工具直接改了 data/ 里的文件时，页面在下一次请求前现场重建，
+# 浏览器刷新（或按 /api/poll 的提示）即可看到，不需要托盘里手动“重建页面”。
+BUILD_LOCK = threading.Lock()
+
+
+def _data_is_stale():
+    html = os.path.join(DIST, "OpenSchedule.html")
+    try:
+        html_m = os.path.getmtime(html)
+    except OSError:
+        return True
+    for name in ("schedule.json", "todo.md", "links.json", "profile.json"):
+        try:
+            if os.path.getmtime(os.path.join(DATA, name)) > html_m:
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def rebuild_if_stale():
+    if not _data_is_stale():
+        return False
+    with BUILD_LOCK:
+        if not _data_is_stale():
+            return False
+        try:
+            build_dir = os.path.join(RES, "build")
+            if build_dir not in sys.path:
+                sys.path.insert(0, build_dir)
+            import build as B
+            B.build(profile="personal", out=os.path.join(DIST, "OpenSchedule.html"),
+                    data_dir=DATA, root=RES)
+            log.info("data changed, page rebuilt")
+            return True
+        except Exception:
+            log.exception("auto rebuild failed")
+            return False
+
+
 # ---------------------------------------------------------------- 用系统默认程序打开
 # os.startfile 即 ShellExecute：按系统默认关联打开，文件夹自动开资源管理器。
 # 可执行/脚本类型一律拒绝（“系统默认打开”对它们等于直接执行）。
@@ -296,7 +337,19 @@ class Handler(SimpleHTTPRequestHandler):
                      "baseUrl": p.get("baseUrl", ""), "model": p.get("model", ""),
                      "hasKey": bool(p.get("apiKey"))} for p in cfg["providers"]]
             return self._json(200, {"active": cfg.get("active", ""), "providers": pool})
+        if path == "/api/poll":
+            # 页面每 4 秒来一次：todo 有变就重读；数据文件有变就先重建再报新页面时间戳
+            rebuild_if_stale()
+
+            def mtime(p):
+                try:
+                    return os.path.getmtime(p)
+                except OSError:
+                    return 0
+            return self._json(200, {"todo": mtime(TODO),
+                                    "html": mtime(os.path.join(DIST, "OpenSchedule.html"))})
         if path in ("/", "/index.html"):
+            rebuild_if_stale()
             self.path = "/OpenSchedule.html"
         return super().do_GET()
 
