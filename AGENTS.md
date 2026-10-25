@@ -50,3 +50,11 @@ schedule draft show|set|append|clear            # 草稿          schedule open 
 - 用户曾在页面上增改的条目存于 `edits.json`（优先于数据文件）；CLI 的 task done/undo 也写它，两边自动同步。
 - 「任务安排」（tasks.md）是**没有明确 DDL、靠自己推进的事**（套磁、写论文等），和 DDL 看板并列；一行一条，`## 标题` 分组。
 - `schedule.json` 已迁移为 `schedule.json.imported`，不要再写它；不要改 `dist/`、`docs/example.html`、`release/`；一律 UTF-8。
+
+## 发布前检查（推 GitHub / 出包前必做）
+
+1. `git add -A --dry-run` 看上传清单：`data/`、`dist/`、`release/`、`logs/` 必须全程被 gitignore。
+2. 隐私扫描（区分大小写）：姓名 / 学校 / 保研目标 / 课程与场地 / 同学姓名 / 论文与项目代号 / 本机绝对路径 / 邮箱 / 手机号段 —— 对**将上传的每个文件**扫，命中就改脱敏。
+3. 干净克隆验证：只把会上传的文件拷到临时目录（没有 `data/`），跑 `build/build.py`、`build/selftest.py`，再起服务实测「勾选能否写回文件」。
+4. 打包产物实跑：解压后双击 exe，验证首跑播种 / 页面三个标签页 / 勾选落盘 / `schedule.exe` 与页面同源。
+5. 文档里的示例一律用脱敏内容（public 版与 README 都不写真实目标与真实截止日）。
