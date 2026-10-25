@@ -2,15 +2,18 @@
 
 一个**单文件、离线可用**的日程应用：左边月历，中间当天时间线，右边 DDL 看板 + 任务安排 + 常用入口 + 草稿。
 
-![主界面](docs/screenshot-main.png)
+> 截图走 jsDelivr CDN 加载（`raw.githubusercontent.com` 在部分网络下不可达，走 CDN 保证都能看到；
+> 图片本体仍在仓库的 `docs/` 目录里）。
+
+![主界面](https://cdn.jsdelivr.net/gh/Traveller-deng/OpenSchedule@main/docs/screenshot-main.png)
 
 左栏收起后是「歌词式」竖排日号：滚动即换日，当前日居中、上下渐隐，有截止的日子在星期两侧带红点。
 
-![收起态](docs/screenshot-collapsed.png)
+![收起态](https://cdn.jsdelivr.net/gh/Traveller-deng/OpenSchedule@main/docs/screenshot-collapsed.png)
 
 右栏和 DDL 看板并列的第二个标签页是**任务安排**：没有明确 DDL、靠自己推进的事（套磁、写论文等），一行一条、可按 `##` 分组。
 
-![任务安排](docs/screenshot-task.png)
+![任务安排](https://cdn.jsdelivr.net/gh/Traveller-deng/OpenSchedule@main/docs/screenshot-task.png)
 
 ## 30 秒上手
 
