@@ -4,10 +4,11 @@
 
 作用：
   1. 托管 dist/ 里的页面（用 http:// 打开，file:// 的限制就没有了）
-  2. /api/todo    GET 读 data/todo.md ／ POST 写回（文件不存在时 GET 返回 404，前端退回构建内副本）
-  3. /api/config  模型池的读写（data/agent.json，Key 不出现在响应里）
-  4. /api/chat    用模型池里选中的模型回答问题，并带上当前日程作上下文
-  5. /api/open    用系统默认程序打开本地文件/文件夹（替代旧的自定义协议方案）
+  2. /api/todo    GET 读 data/todo.md（DDL）／ POST 写回（文件不存在时 GET 返回 404，前端退回构建内副本）
+  3. /api/tasks   GET 读 data/tasks.md（任务安排）／ POST 写回
+  4. /api/config  模型池的读写（data/agent.json，Key 不出现在响应里）
+  5. /api/chat    用模型池里选中的模型回答问题，并带上当前日程作上下文
+  6. /api/open    用系统默认程序打开本地文件/文件夹（替代旧的自定义协议方案）
 
 用法：
     python serve.py            启动并打开浏览器
@@ -20,7 +21,7 @@
     打包-安装  %LOCALAPPDATA%/OpenSchedule/{data,dist}
     环境变量 SCHED_DATA / SCHED_DIST 可强制覆盖。
 """
-import io, os, sys, json, logging, subprocess, threading, webbrowser
+import io, os, sys, json, logging, subprocess, threading, webbrowser, shutil
 import urllib.request, urllib.error
 import http.client
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -28,7 +29,7 @@ from urllib.parse import urlparse
 import ipaddress
 
 APP_NAME = "OpenSchedule"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 log = logging.getLogger("openschedule")
 
@@ -40,7 +41,9 @@ def _resolve_paths():
     if frozen:
         res = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(sys.executable)))
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
-        if os.path.exists(os.path.join(exe_dir, "data", "schedule.json")):
+        # 便携模式：exe 旁边有 data\ 就算（当前数据源是 schedule.md，旧的 schedule.json 也认）
+        if any(os.path.exists(os.path.join(exe_dir, "data", n))
+               for n in ("schedule.md", "schedule.json")):
             base = exe_dir                                    # 便携模式：数据跟 exe 走
         else:
             base = os.path.join(os.environ.get("LOCALAPPDATA") or exe_dir, APP_NAME)
@@ -54,6 +57,7 @@ def _resolve_paths():
 
 RES, DATA, DIST = _resolve_paths()
 TODO = os.path.join(DATA, "todo.md")
+TASKS = os.path.join(DATA, "tasks.md")
 CONFIG = os.path.join(DATA, "agent.json")
 EDITS = os.path.join(DATA, "edits.json")
 DRAFT = os.path.join(DATA, "draft.md")
@@ -220,6 +224,13 @@ def context_text():
     except Exception:
         pass
     try:
+        pend = [l.strip()[6:].strip() for l in read_tasks().splitlines()
+                if l.strip().startswith("- [ ]")]
+        if pend:
+            lines.append("任务安排（无 DDL，自己推进）：" + "；".join(pend[:20]))
+    except Exception:
+        pass
+    try:
         eff = effective_schedule()
         today = datetime.date.today().isoformat()
         plan = eff.get(today) or {}
@@ -296,6 +307,44 @@ def write_todo(text):
     os.replace(tmp, TODO)
 
 
+def read_tasks():
+    """任务安排（data/tasks.md）原文。文件不存在返回空串。"""
+    try:
+        with io.open(TASKS, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def write_tasks(text):
+    os.makedirs(os.path.dirname(TASKS), exist_ok=True)
+    tmp = TASKS + ".tmp"
+    with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    os.replace(tmp, TASKS)
+
+
+def ensure_data():
+    """数据目录为空时，用 examples/ 的示例播种（已存在的文件一律不动）。
+
+    源码运行时 data/ 被 .gitignore 排除，干净克隆里并没有它；没有这一步，
+    页面只有构建内副本，DDL 与任务安排也写不回文件（只有 localStorage）。"""
+    examples = os.path.join(RES, "examples")
+    if not os.path.isdir(examples):
+        return
+    os.makedirs(DATA, exist_ok=True)
+    for name in ("schedule.md", "todo.md", "tasks.md", "links.json"):
+        src = os.path.join(examples, name)
+        dst = os.path.join(DATA, name)
+        if os.path.exists(dst) or not os.path.exists(src):
+            continue
+        try:
+            shutil.copyfile(src, dst)
+            log.info("播种 %s", name)
+        except OSError:
+            log.exception("播种 %s 失败", name)
+
+
 def read_draft():
     try:
         with io.open(DRAFT, encoding="utf-8") as f:
@@ -324,7 +373,7 @@ def _data_is_stale():
         html_m = os.path.getmtime(html)
     except OSError:
         return True
-    for name in ("schedule.md", "schedule.json", "todo.md", "links.json", "profile.json"):
+    for name in ("schedule.md", "schedule.json", "todo.md", "tasks.md", "links.json", "profile.json"):
         try:
             if os.path.getmtime(os.path.join(DATA, name)) > html_m:
                 return True
@@ -430,6 +479,10 @@ class Handler(SimpleHTTPRequestHandler):
             if not os.path.exists(TODO):
                 return self._send(404, "todo.md not found")   # 前端会退回构建内副本
             return self._send(200, read_todo())
+        if path == "/api/tasks":
+            if not os.path.exists(TASKS):
+                return self._send(404, "tasks.md not found")   # 前端会退回构建内副本
+            return self._send(200, read_tasks())
         if path == "/api/draft":
             txt = read_draft()
             if txt is None:
@@ -463,7 +516,8 @@ class Handler(SimpleHTTPRequestHandler):
                     return os.path.getmtime(p)
                 except OSError:
                     return 0
-            return self._json(200, {"todo": mtime(TODO), "edits": mtime(EDITS),
+            return self._json(200, {"todo": mtime(TODO), "tasks": mtime(TASKS),
+                                    "edits": mtime(EDITS),
                                     "draft": mtime(DRAFT),
                                     "html": mtime(os.path.join(DIST, "OpenSchedule.html"))})
         if path in ("/", "/index.html"):
@@ -481,6 +535,12 @@ class Handler(SimpleHTTPRequestHandler):
             except OSError as e:
                 return self._send(500, "写入失败: %s" % e)
             return self._send(200, read_todo())
+        if path == "/api/tasks":
+            try:
+                write_tasks(body)
+            except OSError as e:
+                return self._send(500, "写入失败: %s" % e)
+            return self._send(200, read_tasks())
         if path == "/api/draft":
             try:
                 write_draft(body)
@@ -594,6 +654,7 @@ def main():
             port = int(sys.argv[sys.argv.index("--port") + 1])
         except (IndexError, ValueError):
             pass
+    ensure_data()                          # 干净克隆/首跑：没有 data/ 就用示例播种
     try:
         httpd = bind(port)
     except OSError:

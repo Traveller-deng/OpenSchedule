@@ -1,5 +1,6 @@
 /*__BAKED_BLOCK__*/
 /*__DDL_BLOCK__*/
+/*__TASKS_BLOCK__*/
 /*__LINKS_BLOCK__*/
 
 /* =====================================================================
@@ -16,12 +17,14 @@ try{
 }catch(e){}
 /* 本地服务地址存在时（http），DDL 直接从 data/todo.md 读，见 serve.py */
 const BUILT = (typeof BUILT_AT === "undefined") ? "" : BUILT_AT;
-const emptyEdits = ()=>({adds:{}, ovr:{}, hides:{}, sections:{}, ddlDone:{}, tasksDone:{},
-                          ddl:{ovr:{}, add:[], del:[]}, links:{ovr:{}, add:[], del:[]}});
+const emptyEdits = ()=>({adds:{}, ovr:{}, hides:{}, sections:{}, ddlDone:{}, tasksDone:{}, planDone:{},
+                          ddl:{ovr:{}, add:[], del:[]}, links:{ovr:{}, add:[], del:[]},
+                          plan:{ovr:{}, add:[], del:[]}});
 let edits = emptyEdits();
 try{ edits = Object.assign(edits, JSON.parse(localStorage.getItem(LS_KEY)) || {}); }catch(e){ edits = emptyEdits(); }
 if(!edits.ddl) edits.ddl = {ovr:{}, add:[], del:[]};
 if(!edits.links) edits.links = {ovr:{}, add:[], del:[]};
+if(!edits.plan) edits.plan = {ovr:{}, add:[], del:[]};
 let editsSyncOn = syncEligible(), editsSuppress = false, lastEditsMtime = null;
 function saveEdits(){
   localStorage.setItem(LS_KEY, JSON.stringify(edits));
@@ -314,8 +317,8 @@ document.getElementById("slist").addEventListener("keydown", e=>{
 });
 window.addEventListener("resize", ()=>{ if(ui.lc){ sizeStrip(); fadeStrip(); } });
 
-/* ---------------- 右栏：DDL 看板 / 常用入口 ---------------- */
-const TABS = [{id:"ddl", title:"DDL 看板"}, {id:"links", title:"常用入口"}];
+/* ---------------- 右栏：DDL 看板 / 任务安排 / 常用入口 ---------------- */
+const TABS = [{id:"ddl", title:"DDL 看板"}, {id:"plan", title:"任务安排"}, {id:"links", title:"常用入口"}];
 
 function ymOf(dateStr){
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr||""));
@@ -374,6 +377,7 @@ function renderRight(){
   });
   const head = document.getElementById("rhead"), body = document.getElementById("rbody");
   if(ui.tab === "links") renderLinks(head, body);
+  else if(ui.tab === "plan") renderPlan(head, body);
   else renderDdl(head, body);
 }
 
@@ -436,6 +440,116 @@ function renderDdl(head, body){
       document.getElementById("main").scrollIntoView({behavior:"smooth", block:"start"});
     };
   });
+}
+
+/* ---------------- 任务安排（tasks.md） ----------------
+   没有明确 DDL、靠自己推进的事，和「DDL 看板」并列的一个模块。
+   file:// 打开时用构建内的 TASKS + 本地覆盖层；http:// 打开时以 data/tasks.md 为准。 */
+function planKey(t){ return (t.group||"")+"::"+(t.text||""); }
+function planList(){
+  if(SYNC.ok && SYNC.plan){
+    return SYNC.plan.map((t,i)=>({id:"p"+i, baseKey:planKey(t), key:planKey(t),
+      group:t.group||"", text:t.text||"", done:!!t.done}));
+  }
+  const ovr = edits.plan.ovr || {}, del = new Set(edits.plan.del || []), done = edits.planDone || {};
+  const list = TASKS.map((t,i)=>{
+    const baseKey = planKey(t);
+    const o = ovr[baseKey] || {};
+    const group = o.group !== undefined ? o.group : (t.group||"");
+    const text  = o.text  !== undefined ? o.text  : (t.text||"");
+    const key = group+"::"+text;
+    return {id:"b"+i, baseKey:baseKey, key:key, group:group, text:text,
+            done: done[key] !== undefined ? !!done[key] : !!t.done};
+  }).filter(x=>!del.has(x.baseKey));
+  (edits.plan.add||[]).forEach(a=>{
+    const key = planKey(a);
+    list.push({id:a.id, baseKey:key, key:key, group:a.group||"", text:a.text||"",
+               done: done[key] !== undefined ? !!done[key] : !!a.done, added:true});
+  });
+  return list;
+}
+/* 分组聚合：分组顺序 = 首次出现顺序；没有分组的排在最前 */
+function planGroups(list){
+  const groups = [], byName = {};
+  list.forEach(x=>{
+    const g = x.group || "";
+    if(!byName[g]){ byName[g] = {name:g, items:[]}; groups.push(byName[g]); }
+    byName[g].items.push(x);
+  });
+  return groups;
+}
+function renderPlan(head, body){
+  const all = planList();
+  const open = all.filter(x=>!x.done), done = all.filter(x=>x.done);
+  head.innerHTML = '<h2>任务安排 <span class="cnt">'+open.length+' 进行中</span></h2>'+
+    '<button class="iconbtn" id="plAdd" title="新增一条">＋</button>';
+  const row = (x)=>
+    '<div class="ddl plan'+(x.done?" done":"")+'" data-id="'+esc(x.id)+'" title="点击标记完成">'+
+      '<span class="box" data-ptoggle="'+esc(x.id)+'"></span>'+
+      '<span class="txt"><span class="tk">'+esc(x.text)+'</span></span>'+
+      '<span class="acts"><button data-pedit="'+esc(x.id)+'" title="编辑">✎</button>'+
+      '<button class="act-del" data-pdel="'+esc(x.id)+'" title="删除">×</button></span>'+
+    '</div>';
+  let h = '';
+  if(!all.length){
+    h += '<p class="rhint">还没有任务 —— 点右上角 ＋ 添加。<br>没有明确 DDL、靠自己推进的事记在这里。</p>';
+  }else{
+    planGroups(open).forEach(g=>{
+      if(g.name) h += '<div class="pgroup">'+esc(g.name)+'</div>';
+      g.items.forEach(x=>{ h += row(x); });
+    });
+    if(done.length){
+      h += '<p class="rhint" style="margin-top:14px">已完成</p>';
+      done.forEach(x=>{ h += row(x); });
+    }
+  }
+  body.innerHTML = h;
+
+  document.getElementById("plAdd").onclick = ()=>openPlanEditor(null);
+
+  body.querySelectorAll("[data-ptoggle]").forEach(b=>b.onclick = e=>{
+    e.stopPropagation();
+    const it = planList().find(x=>x.id===b.dataset.ptoggle);
+    if(it) togglePlan(it);
+  });
+  body.querySelectorAll("[data-pedit]").forEach(b=>b.onclick = e=>{
+    e.stopPropagation();
+    const it = planList().find(x=>x.id===b.dataset.pedit);
+    if(it) openPlanEditor(it);
+  });
+  body.querySelectorAll("[data-pdel]").forEach(b=>b.onclick = e=>{
+    e.stopPropagation();
+    const it = planList().find(x=>x.id===b.dataset.pdel);
+    if(it) delPlan(it);
+  });
+  body.querySelectorAll(".ddl.plan").forEach(el=>{
+    el.onclick = e=>{
+      if(e.target.closest(".acts")) return;
+      const it = planList().find(x=>x.id===el.dataset.id);
+      if(it) togglePlan(it);
+    };
+  });
+}
+function togglePlan(it){
+  if(SYNC.ok && SYNC.plan){
+    syncSavePlan(planList().map(x=>({group:x.group, text:x.text,
+      done: x.id===it.id ? !x.done : x.done})));
+    return;
+  }
+  if(!edits.planDone) edits.planDone = {};
+  edits.planDone[it.key] = !it.done;
+  saveEdits(); render();
+}
+function delPlan(it){
+  if(!confirm("删除「"+(it.text||"")+"」？")) return;
+  if(SYNC.ok && SYNC.plan){
+    syncSavePlan(planList().filter(x=>x.id!==it.id).map(x=>({group:x.group, text:x.text, done:x.done})));
+    return;
+  }
+  if(it.added) edits.plan.add = (edits.plan.add||[]).filter(x=>x.id !== it.id);
+  else edits.plan.del = (edits.plan.del||[]).concat([it.baseKey]);
+  if(edits.planDone) delete edits.planDone[it.key];
+  saveEdits(); render();
 }
 
 function renderLinks(head, body){
@@ -521,6 +635,52 @@ document.getElementById("dDelete").onclick = ()=>{
 };
 document.getElementById("dCancel").onclick = ()=>document.getElementById("maskDdl").classList.remove("on");
 
+/* ---------------- 任务安排 编辑 ---------------- */
+let planEditing = null;
+function openPlanEditor(it){
+  planEditing = it || null;
+  document.getElementById("pTitle").textContent = it ? "编辑任务" : "新增任务";
+  document.getElementById("pText").value = it ? (it.text||"") : "";
+  document.getElementById("pGroup").value = it ? (it.group||"") : "";
+  document.getElementById("pDelete").style.display = it ? "" : "none";
+  document.getElementById("maskPlan").classList.add("on");
+  setTimeout(()=>document.getElementById("pText").focus(), 30);
+}
+document.getElementById("pSave").onclick = ()=>{
+  const text = document.getElementById("pText").value.trim();
+  const group = document.getElementById("pGroup").value.trim();
+  if(!text){ alert("事项要填。"); return; }
+  const it = planEditing;
+  document.getElementById("maskPlan").classList.remove("on");
+  if(SYNC.ok && SYNC.plan){
+    const base = planList();
+    const list = base.map(x=>({group:x.group, text:x.text, done:x.done}));
+    if(!it) list.push({group:group, text:text, done:false});
+    else{
+      const i = base.findIndex(x=>x.id===it.id);
+      if(i >= 0) list[i] = {group:group, text:text, done:base[i].done};
+    }
+    syncSavePlan(list);
+    return;
+  }
+  if(!it){
+    edits.plan.add.push({id:"pl"+Date.now(), group:group, text:text, done:false});
+  }else if(it.added){
+    const a = (edits.plan.add||[]).find(x=>x.id===it.id);
+    if(a){ a.group = group; a.text = text; }
+  }else{
+    edits.plan.ovr[it.baseKey] = {group:group, text:text};
+  }
+  saveEdits();
+  render();
+};
+document.getElementById("pDelete").onclick = ()=>{
+  const it = planEditing;
+  document.getElementById("maskPlan").classList.remove("on");
+  if(it) delPlan(it);
+};
+document.getElementById("pCancel").onclick = ()=>document.getElementById("maskPlan").classList.remove("on");
+
 function openLinkEditor(it){
   linkEditing = it || null;
   document.getElementById("kTitle").textContent = it ? "编辑入口" : "新增入口";
@@ -570,7 +730,7 @@ document.getElementById("kCancel").onclick = ()=>document.getElementById("maskLi
 /* ---------------- todo.md 同步 ----------------
    serve.py 在 127.0.0.1 上提供 /api/todo：GET 读文件、POST 写文件。
    用 http 打开时以 data/todo.md 为唯一真源；直接双击 HTML（file://）时退化为构建内副本。 */
-let SYNC = {ok:false, items:null};
+let SYNC = {ok:false, items:null, plan:null};
 function syncEligible(){ return /^https?:$/.test(location.protocol); }
 function parseTodoMd(text){
   const out = [];
@@ -608,12 +768,55 @@ function syncSave(items){
     .catch(()=>{ alert("写入 todo.md 失败，检查 serve.py 是否还在运行。"); render(); });
   return true;
 }
+/* ---------------- tasks.md 同步（任务安排） ----------------
+   serve.py 提供 /api/tasks：GET 读 data/tasks.md、POST 写回。
+   http:// 打开时以文件为唯一真源；file:// 打开时退化为构建内副本 + 本地覆盖层。 */
+function parseTasksMd(text){
+  const out = [];
+  let group = "";
+  String(text||"").split(/\r?\n/).forEach(line=>{
+    const s = line.trim();
+    if(!s) return;
+    if(/^##\s+/.test(s)){ group = s.replace(/^##\s+/,"").trim(); return; }
+    if(/^#/.test(s)) return;
+    const m = /^-\s*\[( |x|X)\]\s*(.+?)\s*$/.exec(s);
+    if(!m) return;
+    out.push({group:group, text:m[2], done:m[1].toLowerCase()==="x"});
+  });
+  return out;
+}
+function tasksMdText(list){
+  const out = ["# 任务安排 · 没有明确 DDL、靠自己推进的事", ""];
+  let cur = null;
+  list.forEach(t=>{
+    const g = t.group || "";
+    if(g !== cur){ cur = g; if(g) out.push("## " + g, ""); }
+    out.push("- [" + (t.done?"x":" ") + "] " + t.text);
+  });
+  return out.join("\n") + "\n";
+}
+function syncLoadPlan(){
+  if(!syncEligible()) return;
+  fetch("/api/tasks", {cache:"no-store"})
+    .then(r=>{ if(!r.ok) throw new Error("bad"); return r.text(); })
+    .then(txt=>{ lastPlanText = txt; SYNC.ok = true; SYNC.plan = parseTasksMd(txt); render(); })
+    .catch(()=>{});                       /* 没有 tasks.md 就用构建内副本 */
+}
+function syncSavePlan(items){
+  if(!SYNC.ok) return false;
+  fetch("/api/tasks", {method:"POST", headers:{"Content-Type":"text/plain; charset=utf-8"}, body: tasksMdText(items)})
+    .then(r=>{ if(!r.ok) throw new Error("bad"); return r.text(); })
+    .then(txt=>{ lastPlanText = txt; SYNC.plan = parseTasksMd(txt); render(); })
+    .catch(()=>{ alert("写入 tasks.md 失败，检查 serve.py 是否还在运行。"); render(); });
+  return true;
+}
 /* ---------------- 外部编辑自动感知 ----------------
    agent 等外部工具直接改 data/ 文件时（serve 模式）：
-   - todo.md 变了 → 4 秒内自动并入页面（正在编辑则挂起，结束后再应用）
+   - todo.md / tasks.md 变了 → 4 秒内自动并入页面（正在编辑则挂起，结束后再应用）
    - 覆盖层（edits.json，页面改动的服务端副本）变了 → 自动采纳（CLI / 另一浏览器写入的）
    - schedule.json 等变了 → 服务端已重建页面，toast 提示刷新查看 */
 let lastTodoText = null;
+let lastPlanText = null;
 let draftSyncApi = null;                       /* draftEl 定义后接线（见文件底部） */
 function editingInFlight(){
   const el = document.activeElement;
@@ -621,10 +824,14 @@ function editingInFlight(){
   return !!document.querySelector(".mask.on");
 }
 if(syncEligible()){
-  let pollBase = null, pendingTodo = null, pendingEdits = null;
+  let pollBase = null, pendingTodo = null, pendingEdits = null, pendingPlan = null;
   function applyTodoText(txt){
     lastTodoText = txt;
     SYNC.ok = true; SYNC.items = parseTodoMd(txt); render();
+  }
+  function applyPlanText(txt){
+    lastPlanText = txt;
+    SYNC.ok = true; SYNC.plan = parseTasksMd(txt); render();
   }
   function applyEditsObj(d, mtime){
     editsSuppress = true;
@@ -641,6 +848,10 @@ if(syncEligible()){
     if(pendingTodo !== null && !editingInFlight()){
       const txt = pendingTodo; pendingTodo = null;
       if(txt !== lastTodoText) applyTodoText(txt);
+    }
+    if(pendingPlan !== null && !editingInFlight()){
+      const txt = pendingPlan; pendingPlan = null;
+      if(txt !== lastPlanText) applyPlanText(txt);
     }
     if(pendingEdits !== null && !editingInFlight()){
       const d = pendingEdits; pendingEdits = null;
@@ -662,6 +873,16 @@ if(syncEligible()){
               if(txt === lastTodoText || txt === pendingTodo) return;
               if(editingInFlight()) pendingTodo = txt;
               else applyTodoText(txt);
+            }).catch(()=>{});
+        }
+        if(s.tasks !== undefined && s.tasks !== pollBase.tasks){
+          pollBase.tasks = s.tasks;
+          fetch("/api/tasks", {cache:"no-store"})
+            .then(r=> r.ok ? r.text() : Promise.reject())
+            .then(txt=>{
+              if(txt === lastPlanText || txt === pendingPlan) return;
+              if(editingInFlight()) pendingPlan = txt;
+              else applyPlanText(txt);
             }).catch(()=>{});
         }
         if(s.edits !== undefined && s.edits !== pollBase.edits){
@@ -1228,13 +1449,13 @@ document.getElementById("todayBtn").onclick = ()=>{ sel = key(TODAY); view = new
 const mask = document.getElementById("mask");
 document.getElementById("mCancel").onclick = ()=>mask.classList.remove("on");
 document.getElementById("addLinkRow").onclick = ()=>{ addLinkRow(); };
-["mask","maskSec","maskDdl","maskLink","maskCfg"].forEach(id=>{
+["mask","maskSec","maskDdl","maskPlan","maskLink","maskCfg"].forEach(id=>{
   const m = document.getElementById(id);
   if(m) m.addEventListener("click", e=>{ if(e.target === m) m.classList.remove("on"); });
 });
 document.addEventListener("keydown", e=>{
   if(e.key !== "Escape") return;
-  ["mask","maskSec","maskDdl","maskLink","maskCfg"].forEach(id=>document.getElementById(id).classList.remove("on"));
+  ["mask","maskSec","maskDdl","maskPlan","maskLink","maskCfg"].forEach(id=>document.getElementById(id).classList.remove("on"));
 });
 
 
@@ -1441,3 +1662,4 @@ applyUI();
 fillQuickLinks();
 render();
 syncLoad();
+syncLoadPlan();

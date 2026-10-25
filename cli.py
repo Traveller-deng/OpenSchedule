@@ -10,8 +10,9 @@
 
 数据（人可直接看/改的文件，均在数据目录 data 目录下）：
   schedule.md  时间表+任务明细（数据源）   todo.md   DDL
-  draft.md     草稿                        links.json 资料路径/入口
-  edits.json   页面上的增改覆盖层           agent.json 模型池
+  tasks.md     任务安排（无 DDL，自推进）    draft.md  草稿
+  links.json   资料路径/入口                edits.json 页面上的增改覆盖层
+  agent.json   模型池
 服务运行时页面会自动感知这里的修改（todo/草稿/覆盖层约 4 秒并入，其余弹提示刷新）。
 
 日期：today / tomorrow / YYYY-MM-DD；DDL 日期：MM.DD（当年）或 YYYY.M.D；
@@ -246,6 +247,134 @@ def cmd_ddl_remove(a):
     del lines[i]
     save_ddl_lines(lines)
     out("已删除：%s %s" % (ds, text))
+    after_write()
+
+
+# ---------------------------------------------------------------- 任务安排（tasks.md）
+# 没有明确 DDL、靠自己推进的事。文件格式：一行一条 '- [ ] 文本'，'## xxx' 是分组标题。
+PLAN_ITEM = re.compile(r"^\s*-\s*\[( |x|X)\]\s*(.+?)\s*$")
+
+
+def plan_lines():
+    try:
+        return io.open(serve.TASKS, encoding="utf-8").read().splitlines()
+    except OSError:
+        return ["# 任务安排 · 没有明确 DDL、靠自己推进的事", ""]
+
+
+def save_plan_lines(lines):
+    os.makedirs(os.path.dirname(serve.TASKS), exist_ok=True)
+    tmp = serve.TASKS + ".tmp"
+    with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines).rstrip("\n") + "\n")
+    os.replace(tmp, serve.TASKS)
+
+
+def plan_entries(lines):
+    """返回 [(行号, 分组, 完成, 文本)]，分组取最近的 '## xxx' 标题。"""
+    ents = []
+    group = ""
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("## "):
+            group = s[3:].strip()
+            continue
+        m = PLAN_ITEM.match(s)
+        if not m:
+            continue
+        ents.append((i, group, m[1].lower() == "x", m[2]))
+    return ents
+
+
+def pick_plan(lines, ident):
+    ents = plan_entries(lines)
+    if not ents:
+        die("tasks.md 里还没有任务")
+    if str(ident).isdigit():
+        n = int(ident)
+        if not 1 <= n <= len(ents):
+            die("序号超出范围 1-%d，先 plan list 查看" % len(ents))
+        return ents[n - 1]
+    hits = [e for e in ents if str(ident) in e[3]]
+    if len(hits) != 1:
+        die("关键词 %r 匹配到 %d 条（需唯一），用 plan list 查看后按序号选择" % (ident, len(hits)))
+    return hits[0]
+
+
+def _plan_insert(lines, group, item_line):
+    """把一条任务插到分组末尾；分组不存在就在文件末尾新建该分组。"""
+    if not group:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines.append(item_line)
+        return lines
+    idxs = [i for i, g, _, _ in plan_entries(lines) if g == group]
+    if idxs:
+        lines.insert(idxs[-1] + 1, item_line)
+        return lines
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines.extend(["", "## " + group, item_line])
+    return lines
+
+
+def cmd_plan_list(a):
+    ents = plan_entries(plan_lines())
+    if not ents:
+        return out("（tasks.md 里还没有任务）")
+    last = None
+    for n, (i, group, done, text) in enumerate(ents, 1):
+        if group != last:
+            out("── %s ──" % (group or "未分组"))
+            last = group
+        out("%3d [%s] %s" % (n, "x" if done else " ", text))
+
+
+def cmd_plan_add(a):
+    lines = plan_lines()
+    lines = _plan_insert(lines, (a.group or "").strip(), "- [ ] " + a.text)
+    save_plan_lines(lines)
+    out("已添加：%s" % a.text)
+    after_write()
+
+
+def cmd_plan_setdone(a, done):
+    lines = plan_lines()
+    i, group, _, text = pick_plan(lines, a.ident)
+    lines[i] = "- [%s] %s" % ("x" if done else " ", text)
+    save_plan_lines(lines)
+    out("已标记为%s：%s" % ("已完成" if done else "未完成", text))
+    after_write()
+
+
+def cmd_plan_edit(a):
+    lines = plan_lines()
+    i, group, done, text = pick_plan(lines, a.ident)
+    new_text = a.text if a.text is not None else text
+    new_group = a.group if a.group is not None else group
+    box = "x" if done else " "
+    line = "- [%s] %s" % (box, new_text)
+    if new_group == group:
+        lines[i] = line
+    else:
+        del lines[i]
+        lines = _plan_insert(lines, new_group, line)
+    save_plan_lines(lines)
+    out("已改为：%s" % new_text)
+    after_write()
+
+
+def cmd_plan_remove(a):
+    lines = plan_lines()
+    i, group, _, text = pick_plan(lines, a.ident)
+    del lines[i]
+    if group and not any(g == group for _, g, _, _ in plan_entries(lines)):
+        for j, ln in enumerate(lines):
+            if ln.strip() == "## " + group:
+                del lines[j]
+                break
+    save_plan_lines(lines)
+    out("已删除：%s" % text)
     after_write()
 
 
@@ -724,7 +853,7 @@ def cmd_status(a):
     out("OpenSchedule %s（%s）" % (serve.APP_VERSION,
                                   "exe" if getattr(sys, "frozen", False) else "源码"))
     out("数据目录: %s" % serve.DATA)
-    for name in ("schedule.md", "todo.md", "draft.md", "links.json",
+    for name in ("schedule.md", "todo.md", "tasks.md", "draft.md", "links.json",
                  "edits.json", "agent.json", "schedule.json.imported"):
         p = os.path.join(serve.DATA, name)
         out("  %-24s %s" % (name, "%d B" % os.path.getsize(p) if os.path.exists(p) else "—"))
@@ -775,6 +904,25 @@ def build_parser():
     x = g.add_parser("remove", help="删除")
     x.add_argument("ident")
     x.set_defaults(fn=cmd_ddl_remove)
+
+    g = sub.add_parser("plan", help="任务安排（tasks.md，无 DDL 的自推进任务）").add_subparsers(dest="action", required=True)
+    g.add_parser("list", help="列出全部").set_defaults(fn=cmd_plan_list)
+    x = g.add_parser("add", help="新增")
+    x.add_argument("text")
+    x.add_argument("--group", help="分组名（不存在就新建）")
+    x.set_defaults(fn=cmd_plan_add)
+    for name, done, h in (("done", True, "标记完成"), ("undo", False, "取消完成标记")):
+        x = g.add_parser(name, help=h)
+        x.add_argument("ident", help="序号或文本关键词")
+        x.set_defaults(fn=lambda a, _d=done: cmd_plan_setdone(a, _d))
+    x = g.add_parser("edit", help="改文本/分组")
+    x.add_argument("ident")
+    x.add_argument("--text", help="新文本")
+    x.add_argument("--group", help="新分组")
+    x.set_defaults(fn=cmd_plan_edit)
+    x = g.add_parser("remove", help="删除")
+    x.add_argument("ident")
+    x.set_defaults(fn=cmd_plan_remove)
 
     g = sub.add_parser("day", help="查看某天（含页面上的本地增补）").add_subparsers(dest="action", required=True)
     x = g.add_parser("show")

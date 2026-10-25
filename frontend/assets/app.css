@@ -339,6 +339,11 @@
   .ddl.cur{background:#f7e9e1}
   .ddl.cur .tk{color:var(--ink);font-weight:500}
   .ddl.cur .dt{color:var(--terra-d)}
+  /* 任务安排：分组标题 */
+  .pgroup{font-size:11.4px;color:var(--stone);letter-spacing:.05em;line-height:1.6;
+    margin:14px 0 1px;padding-left:9px;border-left:2px solid var(--cream)}
+  .pgroup:first-child{margin-top:2px}
+  .ddl.plan .tk{font-size:13px}
   /* 悬浮时才出现，叠在行尾，不占布局宽度 */
   .acts{position:absolute;right:3px;top:50%;transform:translateY(-50%);
     display:flex;gap:1px;padding-left:14px;border-radius:9px;opacity:0;pointer-events:none;

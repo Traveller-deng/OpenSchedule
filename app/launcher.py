@@ -121,7 +121,7 @@ def setup_logging(base):
 def seed_data(examples_dir, data_dir):
     """首次运行：从内置示例播种数据文件。已存在的文件一律不动。"""
     os.makedirs(data_dir, exist_ok=True)
-    for name in ("schedule.json", "todo.md", "links.json"):
+    for name in ("schedule.md", "todo.md", "tasks.md", "links.json"):
         dst = os.path.join(data_dir, name)
         if os.path.exists(dst):
             continue
@@ -136,7 +136,7 @@ def page_is_stale(serve, html_path, version):
     if not os.path.exists(html_path):
         return True
     html_mtime = os.path.getmtime(html_path)
-    for name in ("schedule.md", "schedule.json", "todo.md", "links.json", "profile.json"):
+    for name in ("schedule.md", "schedule.json", "todo.md", "tasks.md", "links.json", "profile.json"):
         p = os.path.join(serve.DATA, name)
         if os.path.exists(p) and os.path.getmtime(p) > html_mtime:
             return True

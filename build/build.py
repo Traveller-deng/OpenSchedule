@@ -177,7 +177,7 @@ def save_schedule(data_dir, days):
 
 # ---------------------------------------------------------------- 数据加载
 def load_ddl(todo_path):
-    """从 TODO LIST.md 解析 DDL。格式：- [ ] 10.25 任务名 / - [x] 2027.1.4 任务名"""
+    """从 TODO LIST.md 解析 DDL。格式：- [ ] 10.25 任务名 / - [x] 12.25 任务名"""
     ddl = []
     if not os.path.exists(todo_path):
         return ddl
@@ -202,6 +202,37 @@ def load_ddl(todo_path):
             "task": task, "done": done,
         })
     return ddl
+
+
+# ---------------------------------------------------------------- 任务安排（tasks.md）
+# 没有明确 DDL、靠自己推进的事。一行一条，## 开头是分组标题。
+#
+#   ## 方向
+#   - [ ] 整理导师清单
+#   - [x] 简历定稿
+_TASK_ITEM = re.compile(r"^\s*-\s*\[( |x|X)\]\s*(.+?)\s*$")
+
+
+def load_tasks(tasks_path):
+    """tasks.md → 任务安排列表 [{group, text, done}]；文件不存在就当空列表。"""
+    out = []
+    if not os.path.exists(tasks_path):
+        return out
+    group = ""
+    for raw in io.open(tasks_path, encoding="utf-8").read().splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        if s.startswith("## "):
+            group = s[3:].strip()
+            continue
+        if s.startswith("#"):
+            continue
+        m = _TASK_ITEM.match(s)
+        if not m:
+            continue
+        out.append({"group": group, "text": m[2], "done": m[1].lower() == "x"})
+    return out
 
 
 def resolve_links(spec, paths):
@@ -328,6 +359,7 @@ def build(profile="personal", out=None, data_dir=None, root=None):
     ddl = load_ddl(os.path.join(data_dir, "todo.md"))
     for d in ddl:
         d["link"] = f(todo) if todo else ""
+    tasks = load_tasks(os.path.join(data_dir, "tasks.md"))
 
     tpl = io.open(os.path.join(root, "frontend", "index.html"), encoding="utf-8").read()
     css = io.open(os.path.join(root, "frontend", "assets", "app.css"), encoding="utf-8").read()
@@ -335,6 +367,7 @@ def build(profile="personal", out=None, data_dir=None, root=None):
 
     baked_js = "const BAKED = " + json.dumps(baked, ensure_ascii=False, indent=1) + ";"
     ddl_js = "const DDL = " + json.dumps(ddl, ensure_ascii=False, indent=1) + ";"
+    tasks_js = "const TASKS = " + json.dumps(tasks, ensure_ascii=False, indent=1) + ";"
     anchor = ""
     if profile == "public" and baked:
         anchor = sorted(baked.keys())[0]
@@ -346,8 +379,10 @@ def build(profile="personal", out=None, data_dir=None, root=None):
 
     app = app.replace("/*__BAKED_BLOCK__*/", baked_js)
     app = app.replace("/*__DDL_BLOCK__*/", ddl_js)
+    app = app.replace("/*__TASKS_BLOCK__*/", tasks_js)
     app = app.replace("/*__LINKS_BLOCK__*/", links_js)
-    assert "__BAKED_BLOCK__" not in app and "__DDL_BLOCK__" not in app and "__LINKS_BLOCK__" not in app
+    assert ("__BAKED_BLOCK__" not in app and "__DDL_BLOCK__" not in app
+            and "__TASKS_BLOCK__" not in app and "__LINKS_BLOCK__" not in app)
 
     tpl = tpl.replace("<!--__FAVICON__-->", favicon_tag(root))
     assert "__FAVICON__" not in tpl
@@ -366,7 +401,7 @@ def build(profile="personal", out=None, data_dir=None, root=None):
     print("written:", out, os.path.getsize(out), "bytes")
     print("profile:", profile, "| days:", len(baked),
           "| 详细排期天数:", sum(1 for p in baked.values() if p.get("items")),
-          "| ddl:", len(ddl))
+          "| ddl:", len(ddl), "| 任务安排:", len(tasks))
     return out
 
 

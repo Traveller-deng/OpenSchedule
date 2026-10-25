@@ -20,7 +20,7 @@ def main():
     dist = os.path.join(tmp, "dist")
     os.makedirs(data)
     os.makedirs(dist)
-    for name in ("schedule.json", "links.json", "todo.md"):
+    for name in ("schedule.md", "links.json", "todo.md", "tasks.md"):
         shutil.copyfile(os.path.join(ROOT, "examples", name), os.path.join(data, name))
 
     env = dict(os.environ)
@@ -28,52 +28,52 @@ def main():
     env["SCHED_DIST"] = dist
     env["PYTHONIOENCODING"] = "utf-8"
 
+    def safe(s):
+        """控制台可能是 GBK，emoji 打不出来就替换掉，别让日志中断测试。"""
+        enc = sys.stdout.encoding or "utf-8"
+        return str(s).encode(enc, "replace").decode(enc, "replace")
+
     def run(args, expect_fail=False):
         r = subprocess.run([sys.executable, os.path.join(ROOT, "cli.py")] + args,
                            env=env, capture_output=True, text=True, encoding="utf-8")
         tag = " ".join(args)
         if (r.returncode != 0) != expect_fail:
-            print("FAIL[%s] rc=%d\n%s\n%s" % (tag, r.returncode, r.stdout, r.stderr))
+            print("FAIL[%s] rc=%d\n%s\n%s" % (safe(tag), r.returncode, r.stdout, r.stderr))
             raise SystemExit(1)
-        print("OK   %s" % tag)
+        print("OK   %s" % safe(tag))
         return r.stdout
 
     today = "2026-10-24" if os.environ.get("OSD_TEST_DATE") is None else os.environ["OSD_TEST_DATE"]
     run(["status"])
-    # json -> md 迁移
     out = run(["day", "show", "2026-10-25"])
-    assert os.path.exists(os.path.join(data, "schedule.md")), "迁移未生成 schedule.md"
-    assert os.path.exists(os.path.join(data, "schedule.json.imported")), "原 json 未留档"
-    # round-trip：迁移生成的 md 能被解析回同样的数据
+    # round-trip：schedule.md 能被解析回同样的数据
     sys.path.insert(0, os.path.join(ROOT, "build"))
     import build as B
     days = B.load_schedule(data)
     rt = B.parse_schedule_md(B.serialize_schedule_md(days))
     assert rt == days, "md 序列化/解析 round-trip 不一致"
     print("OK   schedule.md round-trip")
-    # 真实数据迁移保真（本机有个人数据时才跑；只读拷贝，不动真实文件）
-    real = os.path.join(ROOT, "data", "schedule.json")
+    # 真实数据保真（本机有个人数据时才跑；只读拷贝，不动真实文件）
+    real = os.path.join(ROOT, "data", "schedule.md")
     if os.path.exists(real):
         import tempfile as _tf
         rd = _tf.mkdtemp(prefix="osd-real-")
-        shutil.copyfile(real, os.path.join(rd, "schedule.json"))
+        shutil.copyfile(real, os.path.join(rd, "schedule.md"))
         real_days = B.load_schedule(rd)
         canon = B.parse_schedule_md(B.serialize_schedule_md(real_days))
         rt2 = B.parse_schedule_md(B.serialize_schedule_md(canon))
         # md 记录的是规范化形态（别名→四类型、无链接任务→纯文本），要求二次往返为不动点
-        assert rt2 == canon, "真实 schedule.json 迁移后 md 不是稳定形态"
+        assert rt2 == canon, "真实 schedule.md 规范化后不是稳定形态"
         n_items = sum(len(p.get("items") or []) for p in real_days.values())
         n_items2 = sum(len(p.get("items") or []) for p in canon.values())
         n_tasks = sum(len(p.get("tasks") or []) for p in real_days.values())
         n_tasks2 = sum(len(p.get("tasks") or []) for p in canon.values())
         assert (len(real_days), n_items, n_tasks) == (len(canon), n_items2, n_tasks2), \
-            "迁移丢失内容：%d天/%d块/%d任务 → %d/%d/%d" % (
+            "规范化丢失内容：%d天/%d块/%d任务 → %d/%d/%d" % (
                 len(real_days), n_items, n_tasks, len(canon), n_items2, n_tasks2)
         shutil.rmtree(rd, ignore_errors=True)
-        print("OK   真实数据迁移保真（%d 天 / %d 块 / %d 任务，类型别名规范化）"
+        print("OK   真实数据保真（%d 天 / %d 块 / %d 任务，类型别名规范化）"
               % (len(canon), n_items2, n_tasks2))
-        shutil.rmtree(rd, ignore_errors=True)
-        print("OK   真实数据迁移保真（%d 天）" % len(real_days))
     # ddl
     run(["ddl", "list"])
     run(["ddl", "add", "11.2", "CLI 添加的 DDL"])
@@ -85,6 +85,21 @@ def main():
     run(["ddl", "undo", "1"])
     run(["ddl", "edit", "CLI 添加", "--date", "11.3", "--text", "改过的 DDL"])
     run(["ddl", "remove", "1"])
+    # 任务安排（tasks.md）
+    run(["plan", "list"])
+    run(["plan", "add", "CLI 添加的任务", "--group", "CLI 测试"])
+    out = run(["plan", "list"])
+    assert "CLI 添加的任务" in out and "CLI 测试" in out
+    run(["plan", "done", "CLI 添加"])
+    out = run(["plan", "list"])
+    assert "[x] CLI 添加的任务" in out
+    run(["plan", "undo", "CLI 添加"])
+    run(["plan", "edit", "CLI 添加", "--text", "改过的任务", "--group", "CLI 另一组"])
+    out = run(["plan", "list"])
+    assert "改过的任务" in out and "CLI 另一组" in out
+    run(["plan", "remove", "改过的任务"])
+    out = run(["plan", "list"])
+    assert "改过的任务" not in out
     # block
     run(["block", "add", "2026-10-25", "20:00", "CLI 时间块", "research", "--d", "1h",
          "--detail", "说明内容", "--out", "产出物"])

@@ -4,10 +4,13 @@
 
 用法： python build/make_icon.py
 """
+import os
 import sys
 from PIL import Image, ImageFilter
-src = r"D:\Schedule\app-icon.png"
-out = r"D:\Schedule\app-icon.ico"
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+src = os.path.join(ROOT, "app-icon.png")
+out = os.path.join(ROOT, "app-icon.ico")
 im = Image.open(src).convert("RGBA")
 bbox = im.getbbox()
 print("bbox", bbox, "size", im.size)

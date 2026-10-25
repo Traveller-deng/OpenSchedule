@@ -163,6 +163,20 @@
 </div>
 
 <!-- ========== 常用入口 编辑 ========== -->
+<!-- ========== 任务安排 编辑 ========== -->
+<div class="mask" id="maskPlan">
+  <div class="modal narrow">
+    <h3 id="pTitle">新增任务</h3>
+    <div class="fld"><label>事项</label><input id="pText" placeholder="例：整理导师清单"></div>
+    <div class="fld"><label>分组（可留空）</label><input id="pGroup" placeholder="例：套磁（保研）"></div>
+    <div class="mact">
+      <button class="danger" id="pDelete" style="display:none">删除这条</button>
+      <button type="button" id="pCancel">取消</button>
+      <button class="primary" id="pSave">保存</button>
+    </div>
+  </div>
+</div>
+
 <div class="mask" id="maskLink">
   <div class="modal narrow">
     <h3 id="kTitle">新增入口</h3>

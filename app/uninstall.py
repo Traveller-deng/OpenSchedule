@@ -121,7 +121,8 @@ def subprocess_run_taskkill():
 
 def data_base(app_dir):
     """个人数据位置；返回 (路径, 是否便携模式)。"""
-    if os.path.exists(os.path.join(app_dir, "data", "schedule.json")):
+    if any(os.path.exists(os.path.join(app_dir, "data", n))
+           for n in ("schedule.md", "schedule.json")):
         return os.path.join(app_dir, "data"), True
     return os.path.join(os.environ.get("LOCALAPPDATA") or app_dir, APP_NAME), False
 
