@@ -214,6 +214,9 @@
     display:grid;grid-template-columns:114px 1fr;overflow:hidden;
     transition:box-shadow .14s,border-color .14s}
   .cell:hover{box-shadow:var(--whisper),var(--ring-1);border-color:var(--ring)}
+  .cell{cursor:grab}
+  .cell.dragging{cursor:grabbing;opacity:.82;border-color:var(--terra);
+    box-shadow:var(--whisper),var(--ring-1);user-select:none}
   .cell.hasconflict{border-color:#e8bcbc}
   .cell .tcol{background:var(--sand);padding:16px 14px;display:flex;flex-direction:column;justify-content:center;
     border-right:1px solid var(--cream);position:relative}
@@ -284,6 +287,10 @@
   .task.done .tx{color:var(--stone);text-decoration:line-through;text-decoration-thickness:1px;
     text-decoration-color:#cdcabe}
   .task .lnk{margin-top:0;flex:0 0 auto}
+  .task .tmain{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
+  .task .tmain .tx{flex:none}
+  .task .tlinks{display:flex;flex-wrap:wrap;gap:6px}
+  .task .tlinks .lnk{margin-top:0;max-width:100%}
   .tasknone{font-size:13px;color:var(--silver);padding:14px 10px;line-height:1.7}
 
   .empty{background:var(--card);border:1px dashed var(--ring);border-radius:16px;padding:34px 26px;
@@ -414,6 +421,11 @@
   .fld input:focus,.fld select:focus,.fld textarea:focus,.linkrow input:focus,.linkrow select:focus,.exp:focus{
     outline:none;border-color:#dfa892;box-shadow:0 0 0 3px rgba(201,100,66,.13)}
   .frow{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+  .hkrow{display:flex;gap:8px;align-items:center}
+  .hkrow input{flex:1;min-width:0}
+  .hkhint{font-size:11.5px;color:var(--silver);margin-top:7px;line-height:1.6}
+  .modal .seclabel{font-size:11.5px;letter-spacing:.06em;color:var(--silver);
+    margin:18px 0 12px;padding-top:13px;border-top:1px solid var(--cream)}
   .mact{display:flex;gap:10px;justify-content:flex-end;margin-top:20px;flex-wrap:wrap}
   .mact button{border:1px solid var(--line);background:#fff;border-radius:11px;padding:9px 18px;font-size:13.5px;
     transition:background .12s,border-color .12s,box-shadow .12s,color .12s}

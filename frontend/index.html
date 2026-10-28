@@ -196,10 +196,20 @@
   </div>
 </div>
 
-<!-- ========== 模型池 ========== -->
+<!-- ========== 设置 ========== -->
 <div class="mask" id="maskCfg">
   <div class="modal narrow">
-    <h3>模型池</h3>
+    <h3>设置</h3>
+    <div class="fld">
+      <label>全局快捷键 · 唤起日程 / 再按一次收进托盘</label>
+      <div class="hkrow">
+        <input id="hkKeys" readonly placeholder="Alt+S" title="点「录制」，再按下想要的组合键">
+        <button type="button" class="qbtn" id="hkRec">录制</button>
+        <button type="button" class="qbtn" id="hkSave">保存</button>
+      </div>
+      <div class="hkhint" id="hkHint"></div>
+    </div>
+    <div class="seclabel">模型池</div>
     <div class="poolbar">
       <select id="cfgActive"></select>
       <button type="button" class="qbtn" id="cfgAdd">＋ 新增</button>

@@ -871,6 +871,9 @@ def cmd_status(a):
     eff = effective()
     ddl = len(ddl_entries(ddl_lines()))
     out("数据: %d 天有安排，DDL %d 条" % (len(eff), ddl))
+    hk = serve.HOTKEYS.load()
+    hp = os.path.join(serve.DATA, "hotkey.json")
+    out("全局快捷键: %s%s" % (hk, "" if os.path.exists(hp) else "（默认，未改过）"))
 
 
 # ---------------------------------------------------------------- 参数装配

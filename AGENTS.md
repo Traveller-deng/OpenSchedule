@@ -46,6 +46,8 @@ schedule draft show|set|append|clear            # 草稿          schedule open 
 ## 生效与规则
 
 - CLI 写完自动重建页面；服务运行时页面约 4 秒自动感知（todo/任务安排/草稿/勾选直接并入，schedule 改动弹提示刷新）。
+- **改前端后不用提醒用户手动刷新**：`build/build.py` 会给前端源码算指纹并注入页面，页面发现指纹变了会自己 `location.reload()`（正在输入/弹窗开着就等编辑结束）。服务端也会主动通知旧页面刷新。
+- **全局快捷键**：默认 `Alt+S`（`data/hotkey.json` 可改），`serve.py` 启动时用 `RegisterHotKey` 注册。语义 = 按一下唤起独立窗口（跳到页面最上方、位置尺寸不变），再按一次收进托盘（SW_HIDE，进程还在）。`GET/POST /api/hotkey` 查/改（`{"keys":"Alt+S"}` / `{"pause":true}` / `{"resume":true}`），打包版在 `app/launcher.py` 里单独 start/stop。仅 Windows 支持。
 - 直接手改文件同样有效：改完跑 `schedule rebuild`，或等页面下次构建。
 - 用户曾在页面上增改的条目存于 `edits.json`（优先于数据文件）；CLI 的 task done/undo 也写它，两边自动同步。
 - 「任务安排」（tasks.md）是**没有明确 DDL、靠自己推进的事**（套磁、写论文等），和 DDL 看板并列；一行一条，`## 标题` 分组。

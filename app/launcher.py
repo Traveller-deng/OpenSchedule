@@ -294,6 +294,11 @@ def main():
     server_thread.start()
     write_state(base, serve.PORT)
     log.info("服务就绪 http://127.0.0.1:%d/", serve.PORT)
+    try:
+        if serve.HOTKEYS.start():
+            log.info("全局快捷键：%s", serve.HOTKEYS.keys)
+    except Exception:
+        log.exception("全局快捷键启动失败")
 
     url = "http://127.0.0.1:%d/" % serve.PORT
     if not opts["no_open"]:
@@ -319,6 +324,10 @@ def main():
         stop_event.wait()                 # 没有托盘时进程也常驻，靠 --quit / 日志排查
     finally:
         log.info("退出")
+        try:
+            serve.HOTKEYS.stop()
+        except Exception:
+            pass
         try:
             httpd.shutdown()
         except Exception:

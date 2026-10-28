@@ -223,6 +223,9 @@
     display:grid;grid-template-columns:114px 1fr;overflow:hidden;
     transition:box-shadow .14s,border-color .14s}
   .cell:hover{box-shadow:var(--whisper),var(--ring-1);border-color:var(--ring)}
+  .cell{cursor:grab}
+  .cell.dragging{cursor:grabbing;opacity:.82;border-color:var(--terra);
+    box-shadow:var(--whisper),var(--ring-1);user-select:none}
   .cell.hasconflict{border-color:#e8bcbc}
   .cell .tcol{background:var(--sand);padding:16px 14px;display:flex;flex-direction:column;justify-content:center;
     border-right:1px solid var(--cream);position:relative}
@@ -293,6 +296,10 @@
   .task.done .tx{color:var(--stone);text-decoration:line-through;text-decoration-thickness:1px;
     text-decoration-color:#cdcabe}
   .task .lnk{margin-top:0;flex:0 0 auto}
+  .task .tmain{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
+  .task .tmain .tx{flex:none}
+  .task .tlinks{display:flex;flex-wrap:wrap;gap:6px}
+  .task .tlinks .lnk{margin-top:0;max-width:100%}
   .tasknone{font-size:13px;color:var(--silver);padding:14px 10px;line-height:1.7}
 
   .empty{background:var(--card);border:1px dashed var(--ring);border-radius:16px;padding:34px 26px;
@@ -423,6 +430,11 @@
   .fld input:focus,.fld select:focus,.fld textarea:focus,.linkrow input:focus,.linkrow select:focus,.exp:focus{
     outline:none;border-color:#dfa892;box-shadow:0 0 0 3px rgba(201,100,66,.13)}
   .frow{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+  .hkrow{display:flex;gap:8px;align-items:center}
+  .hkrow input{flex:1;min-width:0}
+  .hkhint{font-size:11.5px;color:var(--silver);margin-top:7px;line-height:1.6}
+  .modal .seclabel{font-size:11.5px;letter-spacing:.06em;color:var(--silver);
+    margin:18px 0 12px;padding-top:13px;border-top:1px solid var(--cream)}
   .mact{display:flex;gap:10px;justify-content:flex-end;margin-top:20px;flex-wrap:wrap}
   .mact button{border:1px solid var(--line);background:#fff;border-radius:11px;padding:9px 18px;font-size:13.5px;
     transition:background .12s,border-color .12s,box-shadow .12s,color .12s}
@@ -707,10 +719,20 @@
   </div>
 </div>
 
-<!-- ========== 模型池 ========== -->
+<!-- ========== 设置 ========== -->
 <div class="mask" id="maskCfg">
   <div class="modal narrow">
-    <h3>模型池</h3>
+    <h3>设置</h3>
+    <div class="fld">
+      <label>全局快捷键 · 唤起日程 / 再按一次收进托盘</label>
+      <div class="hkrow">
+        <input id="hkKeys" readonly placeholder="Alt+S" title="点「录制」，再按下想要的组合键">
+        <button type="button" class="qbtn" id="hkRec">录制</button>
+        <button type="button" class="qbtn" id="hkSave">保存</button>
+      </div>
+      <div class="hkhint" id="hkHint"></div>
+    </div>
+    <div class="seclabel">模型池</div>
     <div class="poolbar">
       <select id="cfgActive"></select>
       <button type="button" class="qbtn" id="cfgAdd">＋ 新增</button>
@@ -809,9 +831,11 @@ const TASKS = [
  }
 ];
 const BAKED_ANCHOR = "2026-10-23";
+const BUILD_ID = "067323492a80";
 const P_TODO_URL = "";
 const LINKS = [];
 const QUICK_LINKS = [];
+const PATHS = {};
 const PROFILE = {};
 
 /* =====================================================================
@@ -828,6 +852,8 @@ try{
 }catch(e){}
 /* 本地服务地址存在时（http），DDL 直接从 data/todo.md 读，见 serve.py */
 const BUILT = (typeof BUILT_AT === "undefined") ? "" : BUILT_AT;
+/* 构建时注入的前端代码指纹：跟服务端对不上 = 浏览器里跑的是旧代码 → 自动刷新 */
+const BUILD = (typeof BUILD_ID === "undefined") ? "" : BUILD_ID;
 const emptyEdits = ()=>({adds:{}, ovr:{}, hides:{}, sections:{}, ddlDone:{}, tasksDone:{}, planDone:{},
                           ddl:{ovr:{}, add:[], del:[]}, links:{ovr:{}, add:[], del:[]},
                           plan:{ovr:{}, add:[], del:[]}});
@@ -920,7 +946,16 @@ function buildList(k){
     const i = list.findIndex(x=>x.id===a.after);
     if(i>=0) list.splice(i+1,0,a); else list.push(a);
   });
+  list.sort(byStart);   /* 按开始时间自动排序；同一时刻保持原有先后 */
   return list;
+}
+/* 排序：时间早的在前；没有时间的排最后。sort 稳定，同刻按原顺序。 */
+function byStart(a,b){
+  const sa=toMin(a.t), sb=toMin(b.t);
+  if(sa===sb) return 0;
+  if(sa===null) return 1;
+  if(sb===null) return -1;
+  return sa-sb;
 }
 function daySections(k){
   const plan = BAKED[k] || {};
@@ -935,6 +970,54 @@ function toggleTask(k, txt){
   const m = edits.tasksDone[k] || (edits.tasksDone[k] = {});
   if(m[txt]) delete m[txt]; else m[txt] = true;
   saveEdits(); render();
+}
+
+/* ---------------- 任务文字 → 资料自动匹配 ----------------
+   拿 links.json 的 paths（文件名、显示名、别名）去任务文字里找，
+   找到对应文件的，就自动挂一个可点的资料链接。 */
+const PATH_LIST = (function(){
+  const P = (typeof PATHS === "undefined") ? {} : (PATHS || {});
+  const out = [];
+  Object.keys(P).forEach(k=>{
+    const p = P[k] || {};
+    const segs = String(p.path||"").split(/[\\/]+/).filter(Boolean);
+    const toks = new Set();
+    (p.aliases||[]).forEach(a=>{ const s=String(a||"").trim(); if(s.length>=2) toks.add(s); });
+    /* 有别名就以别名为准（别名是人工挑过的关键词），避免显示名切出来的碎片误命中 */
+    if(!toks.size){
+      [p.label, p.short].forEach(s=>String(s||"").split(/[\s　]+/).forEach(w=>{ if(w && w.length>=2) toks.add(w); }));
+    }
+    segs.forEach(s=>{ const b=s.replace(/\.[A-Za-z0-9]{1,6}$/,""); if(b.length>=2) toks.add(b); });
+    out.push({key:k, path:p.path||"", label:p.short||p.label||k, kind:p.kind||"资料", toks:Array.from(toks)});
+  });
+  return out;
+})();
+function matchTaskPaths(txt){
+  const t = String(txt||"").toLowerCase();
+  if(!t) return [];
+  const hits = [];
+  PATH_LIST.forEach(p=>{
+    let best = 0;
+    p.toks.forEach(tok=>{
+      const s = String(tok).toLowerCase();
+      if(s.length < 2) return;
+      if(t.indexOf(s) >= 0 && s.length > best) best = s.length;
+    });
+    if(best > 0) hits.push({p:p, score:best});
+  });
+  hits.sort((a,b)=> b.score - a.score || a.p.key.localeCompare(b.p.key));
+  return hits.slice(0,4).map(x=>x.p);
+}
+function sameTarget(a, b){
+  const x = String((a && (a.path||a.url)) || "").toLowerCase().replace(/[\\/]+$/,"");
+  const y = String((b && (b.path||b.url)) || "").toLowerCase().replace(/[\\/]+$/,"");
+  return !!x && x === y;
+}
+function lnkHtml(l){
+  const bd = fileBadge(l);
+  return '<a class="lnk" href="'+esc(linkHref(l))+'" target="_blank" rel="noopener">'+
+    (bd? '<i class="lkb">'+esc(bd)+'</i>':'')+
+    '<span>'+esc(l.label||decodeURIComponent(String(l.url||"").split("/").pop()||"打开"))+'</span></a>';
 }
 function ddlKey(d){ return (d.date||"")+"::"+(d.task||""); }
 /* 未完成且有日期的 DDL 落在哪几天（新增/删除也会实时反映） */
@@ -1636,6 +1719,7 @@ function editingInFlight(){
 }
 if(syncEligible()){
   let pollBase = null, pendingTodo = null, pendingEdits = null, pendingPlan = null;
+  let codeChanged = false, reloadHinted = false;
   function applyTodoText(txt){
     lastTodoText = txt;
     SYNC.ok = true; SYNC.items = parseTodoMd(txt); render();
@@ -1711,6 +1795,16 @@ if(syncEligible()){
           pollBase.html = s.html;
           toast("日程数据已更新，刷新页面查看");
         }
+        /* 前端代码变了（我改了前端但浏览器还跑着旧版本）：自动刷新，
+           正在编辑就先等编辑结束，免得把没保存的内容冲掉。 */
+        if(s.code && BUILD && s.code !== BUILD){
+          codeChanged = true;
+          if(!reloadHinted && editingInFlight()){
+            reloadHinted = true;
+            toast("页面已更新，改完手头的东西会自动刷新");
+          }
+        }
+        if(codeChanged && !editingInFlight()) location.reload();
         if(draftSyncApi) draftSyncApi.onPoll(s);
       }).catch(()=>{});
   }
@@ -1750,12 +1844,7 @@ function renderCell(it, cf){
   if(it.list && it.list.length) h += '<ul class="mini">'+it.list.map(x=>'<li>'+esc(x)+'</li>').join("")+'</ul>';
   if(it.links && it.links.length){
     h += '<div class="lkgroup" style="margin-top:9px"><b>资料</b></div>';
-    it.links.forEach(l=>{
-      const bd = fileBadge(l);
-      h += '<a class="lnk" href="'+esc(linkHref(l))+'" target="_blank" rel="noopener">'+
-        (bd? '<i class="lkb">'+esc(bd)+'</i>':'')+
-        '<span>'+esc(l.label||decodeURIComponent(String(l.url||"").split("/").pop()||"打开"))+'</span></a>';
-    });
+    it.links.forEach(l=>{ h += lnkHtml(l); });
   }
   if(it.out) h += '<div class="output"><b>产出：</b>'+esc(it.out)+'</div>';
   if(cf && cf.with.length) h += '<div class="corner">⚠ 与 '+cf.with.map(w=>esc(w.t||"该段")).join("、")+' 重叠</div>';
@@ -1786,11 +1875,16 @@ function renderDay(k){
       const txt = taskText(t);
       const lnk = typeof t==="string" ? null : t.link;
       const done = taskDone(k, txt);
+      /* 自动匹配到的资料：显式链接在前，自动补的在后，同一个文件不重复 */
+      const auto = matchTaskPaths(txt).filter(p=> !lnk || !sameTarget(lnk, p));
+      const chips = (lnk? lnkHtml(lnk) : "") +
+        auto.map(p=>lnkHtml({url:p.path, path:p.path, label:p.label, kind:p.kind, mode:"app"})).join("");
       h += '<div class="task'+(done?" done":"")+'" data-task="'+esc(txt)+'" role="checkbox" aria-checked="'+(done?"true":"false")+'" tabindex="0" '+
            'title="'+(done?"点击取消勾选":"点击标记完成")+'">'+
-           '<span class="tkbox" aria-hidden="true"></span><span class="tx">'+esc(txt)+'</span>';
-      if(lnk) h += '<a class="lnk" href="'+esc(linkHref(lnk))+'" target="_blank" rel="noopener"><span>'+esc(lnk.label||"资料")+'</span></a>';
-      h += '</div>';
+           '<span class="tkbox" aria-hidden="true"></span>'+
+           '<div class="tmain"><span class="tx">'+esc(txt)+'</span>'+
+           (chips? '<div class="tlinks">'+chips+'</div>' : '')+
+           '</div></div>';
     });
     h += '</div>';
   }else{
@@ -1808,7 +1902,7 @@ function renderDay(k){
     h += '</div>';
   }else{
     h += '<div class="sechead"><h2>时间安排</h2><span class="chip act" id="addInline">＋ 新增</span></div>';
-    h += '<div class="empty" style="margin-top:14px"><h3>这天还没排具体时间</h3><p>你让我安排的时候，我再把上面的主要任务和长期任务合成时间表。</p></div>';
+    h += '<div class="empty" style="margin-top:14px"><h3>这天还没排具体时间</h3></div>';
   }
   return h;
 }
@@ -1849,6 +1943,7 @@ function bind(){
   document.querySelectorAll(".quick button").forEach(b=>b.onclick=()=>{
     const p=b.dataset.q.split("|"); document.getElementById("fTime").value=p[0]; document.getElementById("fDur").value=p[1];
   });
+  bindDrag();
 }
 
 /* ---------------- add / edit 条目 ---------------- */
@@ -1960,6 +2055,63 @@ document.getElementById("mDelete").onclick = ()=>{
   document.getElementById("mask").classList.remove("on");
   delItem(modalId);
 };
+
+/* ---------------- 拖动改时间 ----------------
+   在日视图里按住时间块上下拖 = 改开始时间（按 5 分钟吸附）；
+   页面自己加的条目改写 edits.adds，文件里的条目写覆盖 edits.ovr。 */
+const DRAG_PX_PER_MIN = 2;    /* 拖 2px = 1 分钟（1 小时 = 120px） */
+const DRAG_SNAP_MIN  = 5;     /* 吸附到 5 分钟 */
+function setItemTime(id, m){
+  const it = buildList(sel).find(x=>x.id===id);
+  if(!it) return;
+  const t = pad(Math.floor(m/60)) + ":" + pad(m%60);
+  if(it.src==="user"){
+    const arr = edits.adds[sel]||[];
+    const j = arr.findIndex(x=>x.id===id);
+    if(j<0) return;
+    arr[j] = Object.assign({}, arr[j], {t:t});
+  }else{
+    if(!edits.ovr[sel]) edits.ovr[sel] = {};
+    edits.ovr[sel][id] = Object.assign({}, edits.ovr[sel][id]||{}, {t:t});
+  }
+  saveEdits(); render();
+  toast("「"+(it.title||"")+"」时间改为 "+t);
+}
+function bindDrag(){
+  document.querySelectorAll(".cell").forEach(el=>{
+    el.addEventListener("pointerdown", e=>{
+      if(e.button !== 0) return;
+      if(e.target.closest("button,a,input,textarea,select")) return;
+      const id = el.dataset.id;
+      const it = buildList(sel).find(x=>x.id===id);
+      if(!it) return;
+      const s0 = toMin(it.t);
+      if(s0===null) return;                 /* 没有时间的块不拖 */
+      const y0 = e.clientY;
+      let moved = false, nt = s0;
+      try{ el.setPointerCapture(e.pointerId); }catch(err){}
+      const move = ev=>{
+        const dy = ev.clientY - y0;
+        if(!moved && Math.abs(dy) < 5) return;
+        if(!moved){ moved = true; el.classList.add("dragging"); }
+        const dm = Math.round(dy / DRAG_PX_PER_MIN / DRAG_SNAP_MIN) * DRAG_SNAP_MIN;
+        nt = Math.max(0, Math.min(23*60+59, s0 + dm));
+        const lab = el.querySelector(".tcol b");
+        if(lab) lab.textContent = pad(Math.floor(nt/60)) + ":" + pad(nt%60);
+      };
+      const up = ()=>{
+        el.removeEventListener("pointermove", move);
+        el.removeEventListener("pointerup", up);
+        el.removeEventListener("pointercancel", up);
+        el.classList.remove("dragging");
+        if(moved && nt !== s0) setItemTime(id, nt);
+      };
+      el.addEventListener("pointermove", move);
+      el.addEventListener("pointerup", up);
+      el.addEventListener("pointercancel", up);
+    });
+  });
+}
 
 /* ---------------- 段落编辑（今日主要任务） ---------------- */
 function openSecEditor(kind){
@@ -2260,13 +2412,33 @@ document.getElementById("todayBtn").onclick = ()=>{ sel = key(TODAY); view = new
 const mask = document.getElementById("mask");
 document.getElementById("mCancel").onclick = ()=>mask.classList.remove("on");
 document.getElementById("addLinkRow").onclick = ()=>{ addLinkRow(); };
-["mask","maskSec","maskDdl","maskPlan","maskLink","maskCfg"].forEach(id=>{
+/* 点遮罩关闭弹窗：必须「在遮罩上按下」且「在遮罩上松开」才算真点了外面。
+   否则在输入框里鼠标全选、拖到框外松手，也会把弹窗误关掉。 */
+const MASK_IDS = ["mask","maskSec","maskDdl","maskPlan","maskLink","maskCfg"];
+const MASK_ON_CLOSE = {};
+MASK_IDS.forEach(id=>{
   const m = document.getElementById(id);
-  if(m) m.addEventListener("click", e=>{ if(e.target === m) m.classList.remove("on"); });
+  if(!m) return;
+  let downOnMask = false;
+  m.addEventListener("mousedown", e=>{ downOnMask = (e.target === m); });
+  m.addEventListener("mouseup", e=>{
+    const close = downOnMask && e.target === m;
+    downOnMask = false;
+    if(!close) return;
+    m.classList.remove("on");
+    const cb = MASK_ON_CLOSE[id];
+    if(cb) cb();
+  });
 });
 document.addEventListener("keydown", e=>{
   if(e.key !== "Escape") return;
-  ["mask","maskSec","maskDdl","maskPlan","maskLink","maskCfg"].forEach(id=>document.getElementById(id).classList.remove("on"));
+  MASK_IDS.forEach(id=>{
+    const m = document.getElementById(id);
+    if(!m) return;
+    m.classList.remove("on");
+    const cb = MASK_ON_CLOSE[id];
+    if(cb) cb();
+  });
 });
 
 
@@ -2400,12 +2572,78 @@ function stashFields(){
   if(k) p.apiKey = k;
 }
 
+/* ---------- 全局快捷键（唤起日程 / 再按一次收进托盘） ---------- */
+const hkKeys = document.getElementById("hkKeys");
+const hkHint = document.getElementById("hkHint");
+let hkCapture = false, hkPaused = false;
+
+function hkState(s){
+  if(!s.supported){ hkHint.textContent = "当前系统不支持全局快捷键（仅 Windows 可用）"; return; }
+  if(s.paused){ hkHint.textContent = "已暂停注册（录制中），保存后恢复"; return; }
+  if(s.enabled) hkHint.textContent = "已生效：" + s.keys + "（按一下唤起独立日程窗口并回到顶部，再按一下收进托盘）";
+  else hkHint.textContent = "当前未生效：" + (s.error || "未知原因");
+}
+function hkLoad(){
+  if(!syncEligible()){ hkHint.textContent = "需要先启动 serve.py"; return; }
+  fetch("/api/hotkey").then(r=>r.json()).then(s=>{
+    hkKeys.value = s.keys || "";
+    hkState(s);
+  }).catch(()=>{ hkHint.textContent = "读取失败，确认 serve.py 在运行"; });
+}
+function hkPost(payload){
+  return fetch("/api/hotkey", {method:"POST", headers:{"Content-Type":"application/json"},
+                                body: JSON.stringify(payload)})
+    .then(r=>r.json().then(d=>({ok:r.ok, d:d})));
+}
+document.getElementById("hkRec").onclick = ()=>{
+  hkCapture = true;
+  hkKeys.placeholder = "按下组合键（如 Alt+S），Esc 取消";
+  hkKeys.focus();
+  /* 录制期间先取消系统注册，否则当前这个组合键会被系统吃掉，录不到 */
+  hkPost({pause:true}).then(({d})=>{ hkPaused = true; hkState(d || {}); }).catch(()=>{});
+};
+hkKeys.addEventListener("keydown", e=>{
+  e.preventDefault();
+  if(!hkCapture) return;
+  if(e.key === "Escape"){ hkCapture = false; hkKeys.placeholder = "Alt+S"; return; }
+  const mods = [];
+  if(e.ctrlKey) mods.push("Ctrl");
+  if(e.altKey) mods.push("Alt");
+  if(e.shiftKey) mods.push("Shift");
+  if(e.metaKey) mods.push("Win");
+  if(["Control","Alt","Shift","Meta","OS","CapsLock","AltGraph"].indexOf(e.key) >= 0) return;
+  let key = e.key;
+  if(key === " ") key = "Space";
+  else if(key.length === 1) key = key.toUpperCase();
+  if(!mods.length){ toast("要带上 Ctrl / Alt / Shift / Win 里的至少一个"); return; }
+  hkKeys.value = mods.join("+") + "+" + key;
+  hkCapture = false;
+  hkKeys.placeholder = "Alt+S";
+});
+document.getElementById("hkSave").onclick = ()=>{
+  const keys = hkKeys.value.trim();
+  if(!keys){ toast("先点「录制」设一个组合键"); return; }
+  hkPost({keys:keys}).then(({ok, d})=>{
+    hkPaused = false;
+    if(!ok || d.error){ hkHint.textContent = d.error || "保存失败"; toast(d.error || "保存失败"); return; }
+    hkState(d);
+    toast("快捷键已设为 " + keys);
+  }).catch(()=>{ hkHint.textContent = "保存失败，确认 serve.py 在运行"; });
+};
+/* 关掉设置面板时，如果还停在"已暂停"状态，把系统注册恢复回去 */
+MASK_ON_CLOSE["maskCfg"] = ()=>{
+  if(!hkPaused) return;
+  hkPaused = false;
+  hkPost({resume:true}).catch(()=>{});
+};
+
 document.getElementById("chatcfg").onclick = ()=>{
   if(!syncEligible()){ addMsg("err", "需要先启动 serve.py"); return; }
   fetch("/api/config").then(r=>r.json()).then(c=>{
     POOL = {active: c.active || "", providers: (c.providers || []).map(p=>Object.assign({}, p))};
     renderPoolSelect();
     fillPoolFields();
+    hkLoad();
     maskCfg.classList.add("on");
   }).catch(()=>addMsg("err", "读取配置失败"));
 };
@@ -2468,6 +2706,42 @@ if(typeof BAKED_ANCHOR !== "undefined" && BAKED_ANCHOR){
     }
   }catch(e){}
 }
+
+/* ---------------- 快捷键唤起：页面滚回最上方 ----------------
+   服务端把日程窗口唤起时会发一个通知，这里收到就把页面拉回顶部。 */
+(function bindNotice(){
+  if(!syncEligible()) return;
+  let lastSeq = null, lastReload = null;
+  function scrollTop(){
+    try{
+      window.scrollTo(0, 0);
+      ["main","rbody","lbody","slist","strip"].forEach(id=>{
+        const el = document.getElementById(id);
+        if(el && el.scrollTop) el.scrollTop = 0;
+      });
+    }catch(e){}
+  }
+  function loop(){
+    fetch("/api/notice?since="+(lastSeq === null ? 0 : lastSeq), {cache:"no-store"})
+      .then(r=>r.json())
+      .then(d=>{
+        if(lastSeq === null){                 /* 刚打开的页面记下当前状态，不触发刷新 */
+          lastSeq = d.seq; lastReload = d.reload || 0;
+        }else{
+          if(d.seq !== lastSeq){ lastSeq = d.seq; scrollTop(); }
+          /* 服务端说前端代码换了 → 自己刷新，免得一直跑着旧版本 */
+          if(d.reload && d.reload !== lastReload){
+            lastReload = d.reload;
+            if(!editingInFlight()) location.reload();
+            else toast("页面已更新，改完手头的东西会自动刷新");
+          }
+        }
+        loop();
+      })
+      .catch(()=>setTimeout(loop, 3000));
+  }
+  loop();
+})();
 
 applyUI();
 fillQuickLinks();

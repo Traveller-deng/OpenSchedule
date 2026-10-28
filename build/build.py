@@ -13,7 +13,7 @@
   - data/    是个人数据（课表、DDL、资料路径、习惯画像），已 .gitignore；
   - examples/ 是脱敏后的示例数据，随仓库公开。
 """
-import io, os, re, sys, json, argparse, base64, datetime
+import io, os, re, sys, json, argparse, base64, datetime, hashlib
 from urllib.parse import quote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -318,6 +318,19 @@ def build_links(data_dir):
     return sidebar, quick, todo
 
 
+def build_paths(data_dir):
+    """links.json 的 paths → PATHS：前端拿它给「今日主要任务」自动匹配资料。"""
+    cfg = json.load(io.open(os.path.join(data_dir, "links.json"), encoding="utf-8"))
+    out = {}
+    for k, p in (cfg.get("paths") or {}).items():
+        out[k] = {"path": p.get("path", ""),
+                  "label": p.get("label", k),
+                  "short": p.get("short", ""),
+                  "kind": p.get("kind", "资料"),
+                  "aliases": p.get("aliases", [])}
+    return out
+
+
 def favicon_tag(root=None):
     """app-icon.png → data:image/png;base64，让浏览器标签页也使用同一个图标。"""
     p = os.path.join(root or ROOT, "app-icon.png")
@@ -337,6 +350,20 @@ def build_profile(data_dir):
 
 
 # ---------------------------------------------------------------- 组装
+def code_id(root):
+    """前端代码指纹：只有前端源码变了才变（数据变化不影响）。
+
+    页面拿它和服务端的指纹比对，不一致就说明浏览器里跑的是旧代码 → 自动刷新。"""
+    h = hashlib.sha1()
+    for rel in ("frontend/index.html", "frontend/assets/app.css", "frontend/assets/app.js"):
+        try:
+            with open(os.path.join(root, rel.replace("/", os.sep)), "rb") as f:
+                h.update(f.read())
+        except OSError:
+            pass
+    return h.hexdigest()[:12]
+
+
 def build(profile="personal", out=None, data_dir=None, root=None):
     """profile=personal 用 data_dir（默认 <root>/data），public 用 <root>/examples。
 
@@ -372,9 +399,11 @@ def build(profile="personal", out=None, data_dir=None, root=None):
     if profile == "public" and baked:
         anchor = sorted(baked.keys())[0]
     links_js = ("const BAKED_ANCHOR = " + json.dumps(anchor) + ";\n"
+                "const BUILD_ID = " + json.dumps(code_id(root)) + ";\n"
                 "const P_TODO_URL = " + json.dumps(f(todo) if todo else "") + ";\n"
                 "const LINKS = " + json.dumps(sidebar, ensure_ascii=False, indent=1) + ";\n"
                 "const QUICK_LINKS = " + json.dumps(quick, ensure_ascii=False, indent=1) + ";\n"
+                "const PATHS = " + json.dumps(build_paths(data_dir), ensure_ascii=False, indent=1) + ";\n"
                 "const PROFILE = " + json.dumps(build_profile(data_dir), ensure_ascii=False, indent=1) + ";")
 
     app = app.replace("/*__BAKED_BLOCK__*/", baked_js)
